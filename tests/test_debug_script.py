@@ -66,6 +66,23 @@ def test_diagnosis_flags_incomplete_auth_flow() -> None:
     assert "multi-factor authentication" in diagnosis
 
 
+def test_diagnosis_flags_b2c_exception() -> None:
+    """A rejected B2C session is an auth problem, not a network one."""
+    script = _load_script()
+
+    diagnosis = script._diagnosis(
+        [
+            {
+                "type": "CannotConnectError",
+                "message": "Authentication failed: AADB2C: An exception has occurred.",
+            }
+        ]
+    )
+
+    assert diagnosis is not None
+    assert "multi-factor authentication" in diagnosis
+
+
 def test_diagnosis_flags_network_failure() -> None:
     """A plain connection failure is not blamed on credentials."""
     script = _load_script()

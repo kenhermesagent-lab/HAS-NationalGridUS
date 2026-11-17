@@ -28,9 +28,10 @@ from .const import CONF_SELECTED_ACCOUNTS, DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 # py-nationalgrid reports these when Azure AD B2C finishes the sign-in without
-# handing back a token. In practice that means the account needs interactive
-# multi-factor authentication, which an integration cannot complete.
-_AUTH_FLOW_MARKERS = ("authorization code", "access token")
+# handing back a token, or when B2C itself rejects the session. In practice that
+# means the account needs interactive multi-factor authentication, which an
+# integration cannot complete, so it is not a network problem.
+_AUTH_FLOW_MARKERS = ("authorization code", "access token", "aadb2c", "b2c_exception")
 
 
 def _login_error(err: Exception) -> str:

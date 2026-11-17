@@ -120,7 +120,12 @@ def _diagnosis(errors: list[dict[str, Any]]) -> str | None:
             return _DIAGNOSES["invalid_auth"]
         if error["type"] == "CannotConnectError" and any(
             marker in error["message"].lower()
-            for marker in ("authorization code", "access token")
+            for marker in (
+                "authorization code",
+                "access token",
+                "aadb2c",
+                "b2c_exception",
+            )
         ):
             return _DIAGNOSES["auth_flow"]
     for error in errors:

@@ -83,6 +83,10 @@ async def test_user_flow_strips_whitespace_from_username(
         (InvalidAuthError("bad credentials"), "invalid_auth"),
         (GraphQLError("unauthorized", endpoint="x", status=401), "invalid_auth"),
         (CannotConnectError("offline"), "cannot_connect"),
+        (
+            CannotConnectError("B2C_EXCEPTION - AADB2C: An exception has occurred."),
+            "auth_flow_failed",
+        ),
         (TimeoutError(), "cannot_connect"),
     ],
 )
