@@ -22,6 +22,7 @@ from py_nationalgrid import (
 
 from .const import (
     AMI_HISTORY_DAYS,
+    COMPANY_CODES,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     INTERVAL_HISTORY_DAYS,
@@ -122,6 +123,8 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
         self.session = session
         self._stats_warned: set[str] = set()
         self._usage_warned: set[str] = set()
+        # Company code that answered the cost endpoint, per billing account.
+        self._company_codes: dict[str, str | None] = {}
 
     async def async_force_refresh(self) -> None:
         """Re-fetch everything and refresh listeners."""
@@ -178,6 +181,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                 for node in billing_account.get("meter", {}).get("nodes", [])
                 if node.get("servicePointNumber")
             ]
+            single_meter = len(meter_nodes) == 1
             for meter_info in meter_nodes:
                 meter = MeterUsage(
                     account_id=account_id,
@@ -191,7 +195,8 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                         or meter_info.get("isSmartMeter")
                     ),
                 )
-                await self._async_fetch_usage(meter, single_meter=len(meter_nodes) == 1)
+                await self._async_fetch_usage(meter, single_meter=single_meter)
+                await self._async_fetch_cost(meter, single_meter=single_meter)
                 meters[meter.key] = meter
 
         if not meters and failures:
@@ -258,7 +263,9 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
             quantity = reading.get("quantity")
             if day is None or quantity is None:
                 continue
-            meter.daily[day] = meter.daily.get(day, 0.0) + float(quantity)
+            meter.daily[day] = (
+                meter.daily.get(day, 0.0) + float(quantity) * meter.usage_scale
+            )
 
     async def _async_fetch_intervals(
         self, meter: MeterUsage, today: date, tz: tzinfo
@@ -286,7 +293,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                 continue
             if start.astimezone(tz).date() < start_day:
                 continue
-            intervals.append((start, float(value)))
+            intervals.append((start, float(value) * meter.usage_scale))
 
         meter.hourly = bucket_to_hours(intervals, tz)
 
@@ -325,7 +332,117 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
             usage = row.get("usage")
             if month is None or usage is None:
                 continue
-            meter.monthly[month] = meter.monthly.get(month, 0.0) + float(usage)
+            meter.monthly[month] = (
+                meter.monthly.get(month, 0.0) + float(usage) * meter.usage_scale
+            )
+
+    async def _async_fetch_cost(self, meter: MeterUsage, *, single_meter: bool) -> None:
+        """Fill ``meter`` with the cost National Grid billed per month.
+
+        Bills carry one total per statement with no fuel split, so they are only
+        used when the meter is the account's only one. The cost endpoint is
+        fuel-specific and covers the live billing period, so it wins for any
+        month it reports.
+        """
+        costs: dict[date, float] = {}
+        if single_meter:
+            costs.update(await self._async_bill_costs(meter))
+        costs.update(await self._async_period_costs(meter))
+        meter.monthly_cost = costs
+
+        if not costs:
+            _LOGGER.debug("No cost data for meter %s", meter.key)
+
+    async def _async_bill_costs(self, meter: MeterUsage) -> dict[date, float]:
+        """Return billed charges per statement month from the bill history."""
+        try:
+            bills = await self.client.get_bills(meter.account_id)
+        except _METER_ERRORS as err:
+            _LOGGER.debug("No bill history for meter %s: %s", meter.key, err)
+            return {}
+
+        meter.cost_rows += len(bills)
+        costs: dict[date, float] = {}
+        for bill in bills:
+            statement = _parse_local_date(bill.get("statementDate"))
+            amount = bill.get("currentChargesAmount")
+            if statement is None or amount is None:
+                continue
+            month = statement.replace(day=1)
+            costs[month] = costs.get(month, 0.0) + float(amount)
+        return costs
+
+    async def _async_period_costs(self, meter: MeterUsage) -> dict[date, float]:
+        """Return this fuel's daily costs for the live and previous period."""
+        company_code = await self._async_company_code(meter)
+        if company_code is None:
+            return {}
+
+        today = dt_util.now(_utility_tz()).date()
+        previous_month_end = today.replace(day=1) - timedelta(days=1)
+
+        costs: dict[date, float] = {}
+        # A billing period straddles the two query dates, so the same day can come
+        # back twice and must only be counted once.
+        seen_days: set[str] = set()
+        for query_date in (today, previous_month_end):
+            try:
+                rows = await self.client.get_energy_usage_costs(
+                    meter.account_id, query_date, company_code
+                )
+            except _METER_ERRORS as err:
+                _LOGGER.debug(
+                    "No cost rows for meter %s on %s: %s", meter.key, query_date, err
+                )
+                continue
+
+            meter.cost_rows += len(rows)
+            for row in rows:
+                row_date = str(row.get("date") or "")
+                if row_date and row_date in seen_days:
+                    continue
+                if row_date:
+                    seen_days.add(row_date)
+                if str(row.get("fuelType") or "").upper() != meter.fuel_type:
+                    continue
+                month = _parse_usage_month(row.get("month"))
+                amount = row.get("amount")
+                if month is None or amount is None:
+                    continue
+                costs[month] = costs.get(month, 0.0) + float(amount)
+        return costs
+
+    async def _async_company_code(self, meter: MeterUsage) -> str | None:
+        """Return the company code the cost endpoint accepts for this account.
+
+        The code is required by the query and is not exposed by any endpoint the
+        integration already calls, so the known codes are tried once and the
+        first that answers is remembered.
+        """
+        if meter.account_id in self._company_codes:
+            return self._company_codes[meter.account_id]
+
+        today = dt_util.now(_utility_tz()).date()
+        code: str | None = None
+        for candidate in COMPANY_CODES:
+            try:
+                rows = await self.client.get_energy_usage_costs(
+                    meter.account_id, today, candidate
+                )
+            except _METER_ERRORS:
+                continue
+            if rows:
+                code = candidate
+                break
+
+        self._company_codes[meter.account_id] = code
+        if code is None:
+            _LOGGER.debug(
+                "The cost endpoint accepted none of the company codes for meter "
+                "%s; billed totals from the bill history are used instead",
+                meter.key,
+            )
+        return code
 
     async def _async_import_statistics(self, data: NationalGridData) -> None:
         """Import usage into long term statistics, never failing the refresh."""

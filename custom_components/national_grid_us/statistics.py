@@ -24,16 +24,21 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, UTILITY_TIME_ZONE
+from .const import CURRENCY_USD, DOMAIN, UTILITY_TIME_ZONE
 from .models import MeterUsage
 from .usage import local_midnight
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def statistics_id(meter: MeterUsage, *, returning: bool = False) -> str:
-    """Return the statistics id for a meter's consumption or return series."""
-    suffix = "return" if returning else "usage"
+def statistics_id(
+    meter: MeterUsage, *, returning: bool = False, cost: bool = False
+) -> str:
+    """Return the statistics id for a meter's usage, return or cost series."""
+    if cost:
+        suffix = "cost"
+    else:
+        suffix = "return" if returning else "usage"
     return (
         f"{DOMAIN}:"
         f"{meter.account_id}_{meter.service_point}_{meter.fuel_type.lower()}_{suffix}"
@@ -41,7 +46,7 @@ def statistics_id(meter: MeterUsage, *, returning: bool = False) -> str:
 
 
 def _build_metadata(
-    statistic_id: str, name: str, unit: str, unit_class: str
+    statistic_id: str, name: str, unit: str, unit_class: str | None
 ) -> StatisticMetaData:
     """Build statistics metadata that works across Home Assistant versions.
 
@@ -65,7 +70,7 @@ def _build_metadata(
     if mean_type is not None:
         metadata["mean_type"] = mean_type.NONE
 
-    if "unit_class" in annotations:
+    if unit_class is not None and "unit_class" in annotations:
         metadata["unit_class"] = unit_class
 
     return cast(StatisticMetaData, metadata)
@@ -143,7 +148,7 @@ async def _async_import_series(
     statistic_id: str,
     name: str,
     unit: str,
-    unit_class: str,
+    unit_class: str | None,
     points: dict[datetime, float],
 ) -> None:
     """Append new points to a cumulative statistics series."""
@@ -179,6 +184,13 @@ async def _async_import_series(
     _LOGGER.debug("Imported %s new statistic(s) for %s", len(statistics), statistic_id)
 
 
+def _cost_points(meter: MeterUsage, tz: tzinfo) -> dict[datetime, float]:
+    """Return one cost point per month, keyed at the month's local midnight."""
+    return {
+        local_midnight(month, tz): value for month, value in meter.monthly_cost.items()
+    }
+
+
 async def async_import_meter_statistics(hass: HomeAssistant, meter: MeterUsage) -> None:
     """Import every available reading for ``meter`` into long term statistics."""
     tz = dt_util.get_time_zone(UTILITY_TIME_ZONE)
@@ -203,4 +215,12 @@ async def async_import_meter_statistics(hass: HomeAssistant, meter: MeterUsage) 
         meter.unit,
         meter.unit_class,
         returned,
+    )
+    await _async_import_series(
+        hass,
+        statistics_id(meter, cost=True),
+        f"National Grid {meter.fuel_type.title()} Cost {label}",
+        CURRENCY_USD,
+        None,
+        _cost_points(meter, tz),
     )

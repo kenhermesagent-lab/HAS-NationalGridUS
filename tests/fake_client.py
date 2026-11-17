@@ -97,6 +97,32 @@ class FakeNationalGridClient:
             )
         return reads
 
+    async def get_bills(self, account_number: str) -> list[dict[str, Any]]:
+        """Return one billed statement for this month and the previous one."""
+        self._check("get_bills")
+        today = dt_util.now(dt_util.get_time_zone(TZ_NAME)).date()
+        this_month = today.replace(day=1)
+        previous_month = (this_month - timedelta(days=1)).replace(day=1)
+        return [
+            {
+                "statementDate": this_month.isoformat(),
+                "currentChargesAmount": 30.0,
+                "status": "UNPAID",
+            },
+            {
+                "statementDate": previous_month.isoformat(),
+                "currentChargesAmount": 20.0,
+                "status": "PAID",
+            },
+        ]
+
+    async def get_energy_usage_costs(
+        self, account_number: str, query_date: Any, company_code: str, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        """Return no per-day cost rows, so billed totals are used instead."""
+        self._check("get_energy_usage_costs")
+        return []
+
     async def close(self) -> None:
         """Mark the client as closed."""
         self.closed = True

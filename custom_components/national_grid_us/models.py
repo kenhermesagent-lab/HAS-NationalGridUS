@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, tzinfo
 
-from .const import FUEL_ELECTRIC, fuel_unit, fuel_unit_class
+from .const import FUEL_ELECTRIC, fuel_conversion, fuel_unit, fuel_unit_class
 from .usage import PeriodTotals, compute_period_totals
 
 
@@ -27,9 +27,12 @@ class MeterUsage:
     # One total per calendar month, keyed at the first of the month. Used when
     # the meter publishes no AMI readings at all (non-AMI gas meters).
     monthly: dict[date, float] = field(default_factory=dict)
+    # Billed cost per calendar month in USD, keyed at the first of the month.
+    monthly_cost: dict[date, float] = field(default_factory=dict)
     # Rows each endpoint returned, kept for diagnostics.
     ami_rows: int = 0
     monthly_rows: int = 0
+    cost_rows: int = 0
 
     @property
     def key(self) -> str:
@@ -40,6 +43,11 @@ class MeterUsage:
     def is_electric(self) -> bool:
         """Return True for electricity meters."""
         return self.fuel_type.upper() == FUEL_ELECTRIC
+
+    @property
+    def usage_scale(self) -> float:
+        """Return the factor that converts API values to this meter's unit."""
+        return fuel_conversion(self.fuel_type)
 
     @property
     def unit(self) -> str:

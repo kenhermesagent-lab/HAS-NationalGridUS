@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Final
 
+from homeassistant.const import UnitOfEnergy
+
 DOMAIN: Final = "national_grid_us"
 MANUFACTURER: Final = "National Grid"
 CONFIGURATION_URL: Final = "https://myaccount.nationalgrid.com"
@@ -39,15 +41,22 @@ FUEL_GAS: Final = "GAS"
 
 UNIT_KWH: Final = "kWh"
 UNIT_CCF: Final = "CCF"
+UNIT_THERM: Final = "therm"
 
 UNIT_CLASS_ENERGY: Final = "energy"
 UNIT_CLASS_VOLUME: Final = "volume"
 
-# fuel type -> (unit of measurement, statistic unit class)
-FUEL_UNITS: Final = {
-    FUEL_ELECTRIC: (UNIT_KWH, UNIT_CLASS_ENERGY),
-    FUEL_GAS: (UNIT_CCF, UNIT_CLASS_VOLUME),
-}
+# National Grid's API reports gas as therms (``usageType: THERMS``); the meter
+# reads CCF and the bill converts with this factor. Home Assistant only gained a
+# native therm unit in 2026.11, so older versions get therms converted to CCF
+# rather than carrying a number labelled with the wrong unit.
+THERM_PER_CCF: Final = 1.03775
+
+CURRENCY_USD: Final = "USD"
+
+# Company codes accepted by the cost endpoint. The first one that answers for
+# an account is remembered, because the code is not exposed anywhere else.
+COMPANY_CODES: Final = ("KEDLI", "KEDNY", "NMPC", "NECO", "MECO", "NARR")
 
 # National Grid reports usage in the timezone of the service address. Interval
 # reads are timezone aware; settled daily totals are bucketed in this zone.
@@ -70,11 +79,27 @@ SENSOR_METRICS: Final = (
 )
 
 
+def has_therm_unit() -> bool:
+    """Return True when this Home Assistant version knows the therm unit."""
+    return UNIT_THERM in {str(unit) for unit in UnitOfEnergy}
+
+
 def fuel_unit(fuel_type: str) -> str:
-    """Return the unit of measurement used for a fuel type."""
-    return FUEL_UNITS.get(fuel_type.upper(), FUEL_UNITS[FUEL_ELECTRIC])[0]
+    """Return the unit National Grid reports a fuel type in."""
+    if fuel_type.upper() == FUEL_GAS:
+        return UNIT_THERM if has_therm_unit() else UNIT_CCF
+    return UNIT_KWH
 
 
 def fuel_unit_class(fuel_type: str) -> str:
     """Return the statistics unit class used for a fuel type."""
-    return FUEL_UNITS.get(fuel_type.upper(), FUEL_UNITS[FUEL_ELECTRIC])[1]
+    if fuel_type.upper() == FUEL_GAS:
+        return UNIT_CLASS_ENERGY if has_therm_unit() else UNIT_CLASS_VOLUME
+    return UNIT_CLASS_ENERGY
+
+
+def fuel_conversion(fuel_type: str) -> float:
+    """Return the factor that takes API values to the unit we report."""
+    if fuel_type.upper() == FUEL_GAS and not has_therm_unit():
+        return 1 / THERM_PER_CCF
+    return 1.0

@@ -54,14 +54,16 @@ async def test_setup_entry_loads_and_creates_entities(
 
     assert result is True
     assert entry.state is ConfigEntryState.LOADED
-    assert fake_client.calls == [
+    assert fake_client.calls[:4] == [
         "get_linked_accounts",
         "get_billing_account",
         "get_ami_energy_usages",
         "get_interval_reads",
     ]
+    assert "get_bills" in fake_client.calls
+    assert "get_energy_usage_costs" in fake_client.calls
 
-    assert len(hass.states.async_entity_ids("sensor")) == 6
+    assert len(hass.states.async_entity_ids("sensor")) == 7
     assert len(hass.states.async_entity_ids("binary_sensor")) == 1
     assert len(hass.states.async_entity_ids("button")) == 1
 
@@ -80,6 +82,16 @@ async def test_setup_entry_loads_and_creates_entities(
     yesterday = hass.states.get(yesterday_id)
     assert yesterday is not None
     assert float(yesterday.state) == pytest.approx(10.0)
+
+    cost_states = [
+        state
+        for state in hass.states.async_all("sensor")
+        if state.attributes.get("unit_of_measurement") == "USD"
+    ]
+    assert len(cost_states) == 1
+    assert float(cost_states[0].state) == pytest.approx(30.0)
+    assert cost_states[0].attributes["device_class"] == "monetary"
+    assert cost_states[0].attributes["state_class"] == "total"
 
     hour = hass.states.get(hour_id)
     assert hour is not None

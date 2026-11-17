@@ -72,14 +72,18 @@ Each meter becomes a device with these sensors:
 | Usage yesterday | Previous local day | kWh / CCF |
 | Usage this week | Monday → now | kWh / CCF |
 | Usage this month | 1st of the month → now | kWh / CCF |
-| Usage last month | Previous calendar month | kWh / CCF |
+| Usage last month | Previous calendar month | kWh / therm |
+| Usage cost this month | Current calendar month | USD |
 
 Plus a diagnostic **Smart meter** binary sensor, which is on when that meter is
 returning readings, and a **Refresh usage** button that forces an immediate
 re-fetch.
 
-Gas meters report `CCF`; electricity meters report `kWh`. Both are the units
-National Grid's own portal uses.
+Electricity is reported in `kWh`. Gas is reported in **therms**, which is what
+National Grid's API returns (`usageType: THERMS`); Home Assistant only gained a
+native `therm` unit in 2026.11, so on older versions the therms are converted to
+`CCF` (÷ 1.03775, National Grid's own bill factor) rather than being labelled
+with the wrong unit. Costs are in `USD`.
 
 ## Long-term statistics
 
@@ -90,7 +94,9 @@ monthly graphs and the Energy Dashboard work. Find the series in
 ```
 national_grid_us:<account_id>_<service_point>_electric_usage
 national_grid_us:<account_id>_<service_point>_electric_return
+national_grid_us:<account_id>_<service_point>_electric_cost
 national_grid_us:<account_id>_<service_point>_gas_usage
+national_grid_us:<account_id>_<service_point>_gas_cost
 ```
 
 For example `national_grid_us:1234567890_123456789_electric_usage`. The account
@@ -102,9 +108,15 @@ number and service point number are shown on the meter device page.
 2. Under **Electricity grid**, choose your `..._electric_usage` statistic
 3. Under **Return to grid**, choose `..._electric_return` if you have solar
 4. Under **Gas consumption**, choose `..._gas_usage`
+5. Under **Gas cost**, choose **Use an entity tracking the total costs** and pick
+   `..._gas_cost`, or the **Usage cost this month** sensor
+
+Cost has its own field: a cost statistic cannot be used as the consumption
+source, because consumption must measure a volume or an amount of energy.
 
 Add each meter's statistics separately. Do not also add the old Opower
-statistics for the same meter, or the same usage will be counted twice.
+statistics, or billed statistics from another integration, for the same meter —
+the same usage or cost would be counted twice.
 
 ## How the data is built
 
@@ -115,6 +127,11 @@ statistics for the same meter, or the same usage will be counted twice.
 * **Hourly usage** comes from the near real-time interval endpoint, which serves
   roughly the last two days of 15-minute reads. These are summed into hourly
   buckets.
+* **Cost** comes from the bill history, one total per statement, and from the
+  cost endpoint, which reports per-day amounts for a single fuel in the live and
+  previous billing period. Where both cover the same month, the cost endpoint
+  wins. Cost is imported as its own monthly series so the Energy dashboard's gas
+  cost field has a source.
 * A day that already has interval coverage is *not* also imported from the
   settled daily total, so nothing is counted twice.
 * Statistics are append-only and cumulative: only readings newer than the last
@@ -124,6 +141,11 @@ statistics for the same meter, or the same usage will be counted twice.
 
 * National Grid keeps only about 45 days of AMI data in fast storage, so a fresh
   install backfills roughly 45 days, not years.
+* Cost comes from the bill history, which reports one total per statement with
+  no fuel split, so it is only attributed when the account has a single meter.
+  The fuel-specific cost endpoint covers only the live and previous billing
+  period, and it needs a company code that National Grid does not expose; the
+  known codes are tried once and the winner is remembered.
 * Gas meters do not expose interval reads; gas is daily or monthly only. A gas
   meter that publishes no AMI readings at all falls back to the account's
   monthly usage, so only **Usage this month** and **Usage last month** report

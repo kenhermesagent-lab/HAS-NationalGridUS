@@ -56,7 +56,9 @@
           "init": {
             "title": "Re-authenticate National Grid US",
             "description": "Enter the current password for {username}. If National Grid requires multi-factor authentication for this account, the sign-in will fail again and the diagnostics download will show where it stopped.",
-            "data": { "password": "Password" }
+            "data": {
+              "password": "Password"
+            }
           }
         },
         "error": {
@@ -70,18 +72,37 @@
   },
   "entity": {
     "sensor": {
-      "this_hour": { "name": "Usage this hour" },
-      "today": { "name": "Usage today" },
-      "yesterday": { "name": "Usage yesterday" },
-      "this_week": { "name": "Usage this week" },
-      "this_month": { "name": "Usage this month" },
-      "last_month": { "name": "Usage last month" }
+      "this_hour": {
+        "name": "Usage this hour"
+      },
+      "today": {
+        "name": "Usage today"
+      },
+      "yesterday": {
+        "name": "Usage yesterday"
+      },
+      "this_week": {
+        "name": "Usage this week"
+      },
+      "this_month": {
+        "name": "Usage this month"
+      },
+      "last_month": {
+        "name": "Usage last month"
+      },
+      "cost_this_month": {
+        "name": "Usage cost this month"
+      }
     },
     "binary_sensor": {
-      "smart_meter": { "name": "Smart meter" }
+      "smart_meter": {
+        "name": "Smart meter"
+      }
     },
     "button": {
-      "refresh": { "name": "Refresh usage" }
+      "refresh": {
+        "name": "Refresh usage"
+      }
     }
   }
 }

@@ -65,6 +65,14 @@ def test_split_points_imports_monthly_figures_without_daily_readings() -> None:
     assert returned == {}
 
 
+def test_statistics_id_for_cost() -> None:
+    """Cost gets its own series so the Energy dashboard can use it alone."""
+    assert (
+        statistics_id(_meter(), cost=True)
+        == "national_grid_us:1234567890_987654321_electric_cost"
+    )
+
+
 def test_split_points_skips_months_covered_by_daily_readings() -> None:
     """A monthly figure is not imported on top of settled days in that month."""
     meter = _meter(

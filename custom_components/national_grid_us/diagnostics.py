@@ -46,6 +46,11 @@ def _meter_diagnostics(meter: MeterUsage) -> dict[str, Any]:
         "hourly_last": hourly[-1][0].isoformat() if hourly else None,
         "recent_hourly": {start.isoformat(): value for start, value in hourly[-6:]},
         "monthly_points": len(meter.monthly),
+        "cost_rows": meter.cost_rows,
+        "monthly_cost": {
+            month.isoformat(): round(value, 2)
+            for month, value in sorted(meter.monthly_cost.items())[-6:]
+        },
         "recent_monthly": {
             month.isoformat(): value
             for month, value in sorted(meter.monthly.items())[-6:]
@@ -53,6 +58,7 @@ def _meter_diagnostics(meter: MeterUsage) -> dict[str, Any]:
         "statistic_ids": [
             mask_numbers(statistics_id(meter)),
             mask_numbers(statistics_id(meter, returning=True)),
+            mask_numbers(statistics_id(meter, cost=True)),
         ],
     }
 
@@ -136,6 +142,7 @@ async def async_get_config_entry_diagnostics(
             for statistic in (
                 statistics_id(meter),
                 statistics_id(meter, returning=True),
+                statistics_id(meter, cost=True),
             )
         ],
     )

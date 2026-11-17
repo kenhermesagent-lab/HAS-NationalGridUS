@@ -9,7 +9,10 @@ from zoneinfo import ZoneInfo
 from custom_components.national_grid_us.binary_sensor import (
     NationalGridSmartMeterSensor,
 )
-from custom_components.national_grid_us.const import MONTHLY_HISTORY_MONTHS
+from custom_components.national_grid_us.const import (
+    MONTHLY_HISTORY_MONTHS,
+    fuel_conversion,
+)
 from custom_components.national_grid_us.coordinator import NationalGridCoordinator
 from custom_components.national_grid_us.models import NationalGridData
 from custom_components.national_grid_us.sensor import NationalGridUsageSensor
@@ -19,6 +22,14 @@ TZ = ZoneInfo("America/New_York")
 
 class FakeClient:
     """Minimal stand-in for py_nationalgrid.NationalGridClient."""
+
+    async def get_bills(self, account_number: str) -> list[dict[str, Any]]:
+        return []
+
+    async def get_energy_usage_costs(
+        self, account_number: str, query_date: Any, company_code: str, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        return []
 
     async def get_linked_accounts(self) -> list[dict[str, Any]]:
         return [
@@ -145,6 +156,45 @@ class FakeMonthlyClient(FakeClient):
         ]
 
 
+class FakeBilledClient(FakeMonthlyClient):
+    """A gas meter whose cost only exists as billed statements."""
+
+    async def get_bills(self, account_number: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "statementDate": "2026-11-05T00:00:00-05:00",
+                "currentChargesAmount": 41.5,
+                "status": "UNPAID",
+            },
+            {
+                "statementDate": "2026-10-05T00:00:00-05:00",
+                "currentChargesAmount": 33.25,
+                "status": "PAID",
+            },
+            {"statementDate": None, "currentChargesAmount": 10.0},
+        ]
+
+
+class FakeCostEndpointClient(FakeBilledClient):
+    """A gas meter whose cost endpoint answers for one company code."""
+
+    async def get_energy_usage_costs(
+        self, account_number: str, query_date: Any, company_code: str, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        if company_code != "KEDLI":
+            return []
+        return [
+            {"date": "2026-11-10", "fuelType": "GAS", "amount": 5.5, "month": 202611},
+            {"date": "2026-11-11", "fuelType": "GAS", "amount": 1.5, "month": 202611},
+            {
+                "date": "2026-11-12",
+                "fuelType": "ELECTRIC",
+                "amount": 99.0,
+                "month": 202611,
+            },
+        ]
+
+
 class FakeCoordinator:
     """Coordinator stub for entity property tests."""
 
@@ -162,6 +212,7 @@ def _build_coordinator(
     coordinator.selected_accounts = {"1234567890"}
     coordinator._stats_warned = set()
     coordinator._usage_warned = set()
+    coordinator._company_codes = {}
 
     async def _noop_import(data: NationalGridData) -> None:
         return None
@@ -198,8 +249,12 @@ async def test_update_data_fetches_usage_for_meter_without_smart_flag() -> None:
 
     meter = data.meters["1234567890_888"]
     assert meter.is_smart_meter is False
-    assert meter.unit == "CCF"
-    assert meter.daily == {date(2026, 11, 15): 0.4, date(2026, 11, 16): 0.2}
+    assert meter.unit in {"CCF", "therm"}
+    scale = fuel_conversion("GAS")
+    assert meter.daily == {
+        date(2026, 11, 15): 0.4 * scale,
+        date(2026, 11, 16): 0.2 * scale,
+    }
     assert meter.hourly == {}
 
 
@@ -216,7 +271,11 @@ async def test_monthly_usage_fills_in_for_meter_without_ami_readings() -> None:
     assert meter.ami_rows == 0
     assert meter.monthly_rows == 4
     # Junk months and rows without a usage value are dropped.
-    assert meter.monthly == {date(2026, 10, 1): 12.5, date(2026, 11, 1): 3.5}
+    scale = fuel_conversion("GAS")
+    assert meter.monthly == {
+        date(2026, 10, 1): 12.5 * scale,
+        date(2026, 11, 1): 3.5 * scale,
+    }
     assert client.monthly_request is not None
     assert client.monthly_request[0] == "1234567890"
     assert client.monthly_request[2] == MONTHLY_HISTORY_MONTHS
@@ -230,6 +289,37 @@ async def test_monthly_usage_is_not_spread_over_several_meters() -> None:
 
     assert len(data.meters) == 2
     assert all(meter.monthly == {} for meter in data.meters.values())
+
+
+async def test_cost_comes_from_bills_for_a_single_meter_account() -> None:
+    """Billed statements become the meter's monthly cost."""
+    coordinator = _build_coordinator(FakeBilledClient())
+
+    data = await coordinator._async_update_data()
+
+    meter = data.meters["1234567890_888"]
+    assert meter.monthly_cost == {date(2026, 11, 1): 41.5, date(2026, 10, 1): 33.25}
+    assert meter.cost_rows == 3
+
+
+async def test_cost_endpoint_wins_for_the_months_it_covers() -> None:
+    """Fuel-specific daily costs replace the account's billed total."""
+    coordinator = _build_coordinator(FakeCostEndpointClient())
+
+    data = await coordinator._async_update_data()
+
+    meter = data.meters["1234567890_888"]
+    # November comes from the fuel-specific endpoint, October from the bill.
+    assert meter.monthly_cost == {date(2026, 10, 1): 33.25, date(2026, 11, 1): 7.0}
+
+
+async def test_billed_cost_is_not_attributed_to_a_multi_meter_account() -> None:
+    """Bill totals carry no fuel split, so two meters get no bill cost."""
+    coordinator = _build_coordinator(FakeBilledClient(meter_count=2))
+
+    data = await coordinator._async_update_data()
+
+    assert all(meter.monthly_cost == {} for meter in data.meters.values())
 
 
 async def test_binary_sensor_follows_available_readings() -> None:

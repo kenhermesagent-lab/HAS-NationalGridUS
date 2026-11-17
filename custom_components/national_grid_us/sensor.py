@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, tzinfo
+from datetime import date, datetime, tzinfo
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -17,6 +17,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CURRENCY_USD,
     DOMAIN,
     MANUFACTURER,
     METRIC_LAST_MONTH,
@@ -27,6 +28,7 @@ from .const import (
     METRIC_YESTERDAY,
     SENSOR_METRICS,
     UTILITY_TIME_ZONE,
+    has_therm_unit,
 )
 from .coordinator import NationalGridCoordinator
 from .models import MeterUsage
@@ -43,13 +45,18 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up usage sensors for every meter."""
+    """Set up usage and cost sensors for every meter."""
     coordinator: NationalGridCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[SensorEntity] = [
         NationalGridUsageSensor(coordinator, meter_key, metric)
         for meter_key in coordinator.data.meters
         for metric in SENSOR_METRICS
+    ]
+    entities.extend(
+        NationalGridCostSensor(coordinator, meter_key)
+        for meter_key in coordinator.data.meters
     )
+    async_add_entities(entities)
 
 
 class NationalGridUsageSensor(CoordinatorEntity[NationalGridCoordinator], SensorEntity):
@@ -101,11 +108,18 @@ class NationalGridUsageSensor(CoordinatorEntity[NationalGridCoordinator], Sensor
 
     @property
     def device_class(self) -> SensorDeviceClass | None:
-        """Return energy for electricity and gas for gas meters."""
+        """Return the device class matching the unit this meter reports.
+
+        National Grid reports gas in therms, which Home Assistant accepts under
+        the energy device class only; versions without a therm unit get CCF and
+        the gas device class.
+        """
         meter = self._meter
         if meter is None:
             return None
-        return SensorDeviceClass.ENERGY if meter.is_electric else SensorDeviceClass.GAS
+        if meter.is_electric or has_therm_unit():
+            return SensorDeviceClass.ENERGY
+        return SensorDeviceClass.GAS
 
     @property
     def native_unit_of_measurement(self) -> str | None:
@@ -161,3 +175,69 @@ class NationalGridUsageSensor(CoordinatorEntity[NationalGridCoordinator], Sensor
         if self._metric == METRIC_LAST_MONTH:
             return {"month_start": totals.last_month_start.isoformat()}
         return None
+
+
+class NationalGridCostSensor(CoordinatorEntity[NationalGridCoordinator], SensorEntity):
+    """The cost National Grid billed for one meter in the current month.
+
+    Energy dashboard cost sources need a monetary sensor whose statistics
+    accumulate, so this uses the total state class and resets at local midnight
+    on the first of the month.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "cost_this_month"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = CURRENCY_USD
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: NationalGridCoordinator, meter_key: str) -> None:
+        """Initialise the sensor."""
+        super().__init__(coordinator)
+        self._meter_key = meter_key
+        meter = coordinator.data.meters[meter_key]
+        self._attr_unique_id = (
+            f"{DOMAIN}_{meter_key}_{meter.fuel_type.lower()}_cost_this_month"
+        )
+
+    @property
+    def _meter(self) -> MeterUsage | None:
+        """Return the meter this sensor belongs to."""
+        return self.coordinator.data.meters.get(self._meter_key)
+
+    @property
+    def available(self) -> bool:
+        """Return True when the meter is still present in the latest data."""
+        return super().available and self._meter is not None
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Group this sensor with the rest of the meter's entities."""
+        meter = self._meter
+        if meter is None:
+            return None
+        return DeviceInfo(
+            identifiers={(DOMAIN, meter.key)},
+            manufacturer=MANUFACTURER,
+            name=f"{meter.fuel_type.title()} meter {meter.service_point}",
+            model="AMI smart meter" if meter.is_smart_meter else "Meter",
+            serial_number=meter.meter_number or None,
+        )
+
+    def _month_start(self) -> date:
+        """Return the first day of the current month in the utility timezone."""
+        return dt_util.now(_utility_tz()).date().replace(day=1)
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the cost billed for this meter so far this month."""
+        meter = self._meter
+        if meter is None:
+            return None
+        return round(meter.monthly_cost.get(self._month_start(), 0.0), 2)
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return the start of the month this sensor resets on."""
+        return local_midnight(self._month_start(), _utility_tz())
