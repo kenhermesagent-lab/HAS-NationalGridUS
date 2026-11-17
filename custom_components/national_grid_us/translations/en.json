@@ -47,6 +47,12 @@
       }
     }
   },
+  "issues": {
+    "auth_failed": {
+      "title": "National Grid US sign-in failed",
+      "description": "Home Assistant could not sign in to National Grid for {account}.\n\nIf the same email and password work at myaccount.nationalgrid.com, the account most likely requires multi-factor authentication, which this integration cannot complete.\n\nTo see exactly where the sign-in stopped, open Settings → Devices & services → National Grid US → ⋮ → Download diagnostics, or run scripts/debug_nationalgrid.py, and attach the result to an issue."
+    }
+  },
   "entity": {
     "sensor": {
       "this_hour": { "name": "Usage this hour" },

@@ -10,8 +10,8 @@ the error details.
 
 Credentials are read from --username/--password, the NG_USERNAME/NG_PASSWORD
 environment variables, or an interactive prompt. They are never written to the
-output. Account, meter, premise and service point numbers are masked unless
---show-ids is passed, and emails, passwords and tokens are always redacted.
+output. Emails, passwords and tokens are always redacted; account, meter,
+premise and service point numbers are masked unless --show-ids is passed.
 """
 
 from __future__ import annotations
@@ -68,28 +68,34 @@ _DIAGNOSES = {
     ),
 }
 
+# py-nationalgrid reports a refused Azure AD B2C session as CannotConnectError.
+_B2C_MARKERS = ("authorization code", "access token", "aadb2c", "b2c_exception")
+
 
 class _LogCapture(logging.Handler):
     """Collect py-nationalgrid log records for the dump."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, mask_ids: bool = True) -> None:
         super().__init__(level=logging.DEBUG)
+        self._mask_ids = mask_ids
         self.records: list[dict[str, str]] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         self.records.append(
             {
                 "level": record.levelname,
-                "message": redact_text(record.getMessage()),
+                "message": redact_text(record.getMessage(), mask_ids=self._mask_ids),
             }
         )
 
 
-def _error_detail(step: str, err: Exception, duration: float) -> dict[str, Any]:
+def _error_detail(
+    step: str, err: Exception, duration: float, *, mask_ids: bool = True
+) -> dict[str, Any]:
     detail: dict[str, Any] = {
         "step": step,
         "type": type(err).__name__,
-        "message": redact_text(str(err)),
+        "message": redact_text(str(err), mask_ids=mask_ids),
         "duration_s": round(duration, 2),
     }
     status = getattr(err, "status", None)
@@ -98,13 +104,17 @@ def _error_detail(step: str, err: Exception, duration: float) -> dict[str, Any]:
     return detail
 
 
-async def _step(name: str, coroutine: Any, errors: list[dict[str, Any]]) -> Any | None:
+async def _step(
+    name: str, coroutine: Any, errors: list[dict[str, Any]], *, mask_ids: bool = True
+) -> Any | None:
     """Await a client call, recording failures instead of aborting."""
     started = time.monotonic()
     try:
         result = await coroutine
     except Exception as err:  # noqa: BLE001 - the dump must survive any failure
-        errors.append(_error_detail(name, err, time.monotonic() - started))
+        errors.append(
+            _error_detail(name, err, time.monotonic() - started, mask_ids=mask_ids)
+        )
         print(f"  {name}: FAILED ({type(err).__name__})", file=sys.stderr)
         return None
     duration = round(time.monotonic() - started, 2)
@@ -119,13 +129,7 @@ def _diagnosis(errors: list[dict[str, Any]]) -> str | None:
         if error["type"] == "InvalidAuthError":
             return _DIAGNOSES["invalid_auth"]
         if error["type"] == "CannotConnectError" and any(
-            marker in error["message"].lower()
-            for marker in (
-                "authorization code",
-                "access token",
-                "aadb2c",
-                "b2c_exception",
-            )
+            marker in error["message"].lower() for marker in _B2C_MARKERS
         ):
             return _DIAGNOSES["auth_flow"]
     for error in errors:
@@ -143,9 +147,10 @@ async def collect(
     days: int,
     account_filter: str | None,
     intervals: bool,
+    mask_ids: bool = True,
 ) -> dict[str, Any]:
     """Sign in and collect every response the integration depends on."""
-    capture = _LogCapture()
+    capture = _LogCapture(mask_ids=mask_ids)
     package_logger = logging.getLogger("py_nationalgrid")
     package_logger.setLevel(logging.DEBUG)
     package_logger.addHandler(capture)
@@ -171,7 +176,10 @@ async def collect(
 
             print("Signing in and reading accounts...", file=sys.stderr)
             links = await _step(
-                "get_linked_accounts", client.get_linked_accounts(), errors
+                "get_linked_accounts",
+                client.get_linked_accounts(),
+                errors,
+                mask_ids=mask_ids,
             )
             data["linked_accounts"] = links
             if links is None:
@@ -198,6 +206,7 @@ async def collect(
                     f"get_billing_account({account})",
                     client.get_billing_account(account),
                     errors,
+                    mask_ids=mask_ids,
                 )
                 data["billing_accounts"][account] = billing
                 if not billing:
@@ -223,6 +232,7 @@ async def collect(
                             fuel_type=fuel_type,
                         ),
                         errors,
+                        mask_ids=mask_ids,
                     )
 
                     if intervals and fuel_type == "ELECTRIC":
@@ -237,6 +247,7 @@ async def collect(
                                 ),
                             ),
                             errors,
+                            mask_ids=mask_ids,
                         )
     finally:
         package_logger.removeHandler(capture)
@@ -302,6 +313,7 @@ def main() -> int:
         print("A username is required.", file=sys.stderr)
         return 64
     password = args.password or getpass.getpass("National Grid password: ")
+    mask_ids = not args.show_ids
 
     payload = asyncio.run(
         collect(
@@ -310,9 +322,10 @@ def main() -> int:
             days=args.days,
             account_filter=args.account,
             intervals=not args.no_intervals,
+            mask_ids=mask_ids,
         )
     )
-    payload = redact_payload(payload, mask_ids=not args.show_ids)
+    payload = redact_payload(payload, mask_ids=mask_ids)
 
     text = json.dumps(payload, indent=2, default=str)
     if args.output:

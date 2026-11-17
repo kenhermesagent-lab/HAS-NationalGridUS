@@ -157,6 +157,9 @@ National Grid only requires MFA on some accounts. If yours does, the integration
 can't read your usage until it is turned off for that login, or National Grid
 offers a password-only path.
 
+When setup fails on a rejected sign-in, Home Assistant also raises a repair
+issue (**Settings → System → Repairs**) that points at the diagnostics download.
+
 To confirm what actually happened on your account:
 
 1. **Download diagnostics** (below) — it works even when setup failed, and shows

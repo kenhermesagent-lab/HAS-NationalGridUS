@@ -62,6 +62,36 @@ def test_mask_identifier_is_stable_and_opaque() -> None:
     assert "1234567890" not in first
 
 
+def test_text_masks_identifiers_in_urls_and_errors() -> None:
+    """Long identifiers in free text go, while dates and readings stay."""
+    text = (
+        "GET https://myaccount.nationalgrid.com/api/billing/1234567890/usage"
+        "?servicePointNumber=987654321 failed: account 1234567890 unknown; "
+        "reading 16.0 kWh at 0.1234 per kWh on 2026-11-15 at "
+        "2026-11-15T04:50:10.123456+00:00 (total 1234567.89 kWh)"
+    )
+
+    redacted = redact_text(text)
+
+    assert "1234567890" not in redacted
+    assert "987654321" not in redacted
+    assert "/id:" in redacted
+    assert "16.0 kWh" in redacted
+    assert "0.1234 per kWh" in redacted
+    assert "2026-11-15T04:50:10.123456+00:00" in redacted
+    assert "1234567.89 kWh" in redacted
+
+
+def test_text_keeps_identifiers_when_ids_are_shown() -> None:
+    """--show-ids keeps identifiers but still removes secrets."""
+    text = "account 1234567890 for someone@example.com"
+
+    shown = redact_text(text, mask_ids=False)
+
+    assert "1234567890" in shown
+    assert "someone@example.com" not in shown
+
+
 def test_identifiers_used_as_keys_are_masked() -> None:
     """Account numbers must not survive as dictionary keys."""
     redacted = redact_payload(

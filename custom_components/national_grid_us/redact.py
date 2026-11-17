@@ -16,9 +16,14 @@ _JWT_RE = re.compile(r"eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}")
 # strings; dates such as 2026-11-15 must never be mistaken for one.
 _WHOLE_ID_RE = re.compile(r"\d{3,}")
 _INLINE_ID_RE = re.compile(r"\d{3,}")
+# The same identifiers also show up inside URLs and API error strings. Only a
+# run of six or more digits that does not touch a date, a clock time or a
+# decimal is treated as an identifier, so 2026-11-15, 04:50:10.123456 and
+# readings such as 16.0 or 1234567.89 survive untouched.
+_INLINE_LONG_ID_RE = re.compile(r"(?<![\w.:+\-T])(\d{6,})(?![\w.:+\-])")
 
 # Bumped whenever the shape of a redacted dump changes.
-REDACTION_VERSION = 1
+REDACTION_VERSION = 2
 
 SECRET_KEYS = frozenset(
     {
@@ -51,10 +56,13 @@ def mask_identifier(value: object) -> str:
     return f"id:{digest}"
 
 
-def redact_text(value: str) -> str:
-    """Remove email addresses and bearer tokens from free-form text."""
+def redact_text(value: str, *, mask_ids: bool = True) -> str:
+    """Remove email addresses, bearer tokens and identifiers from free text."""
     text = _EMAIL_RE.sub("<email>", value)
-    return _JWT_RE.sub("<jwt>", text)
+    text = _JWT_RE.sub("<jwt>", text)
+    if not mask_ids:
+        return text
+    return _INLINE_LONG_ID_RE.sub(lambda match: mask_identifier(match.group()), text)
 
 
 def mask_numbers(text: str) -> str:
