@@ -1,0 +1,2 @@
+py-nationalgrid==0.5.1
+pytest-homeassistant-custom-component==0.13.205

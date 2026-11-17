@@ -1,0 +1,13 @@
+{
+  "domain": "national_grid_us",
+  "name": "National Grid US",
+  "codeowners": ["@kenhermesagent-lab"],
+  "config_flow": true,
+  "documentation": "https://github.com/kenhermesagent-lab/HAS-NationalGridUS",
+  "issue_tracker": "https://github.com/kenhermesagent-lab/HAS-NationalGridUS/issues",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "after_dependencies": ["recorder"],
+  "requirements": ["py-nationalgrid==0.5.1"],
+  "version": "1.0.0"
+}

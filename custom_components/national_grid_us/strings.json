@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "National Grid US account",
+        "description": "Sign in with the same email and password you use at myaccount.nationalgrid.com.",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      },
+      "select_accounts": {
+        "title": "Billing accounts",
+        "description": "Choose the billing accounts Home Assistant should track. Usage for every meter on these accounts is imported into long-term statistics.",
+        "data": {
+          "selected_accounts": "Billing accounts"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate National Grid US",
+        "description": "National Grid rejected the stored password for {username}. Enter the current password to keep the integration running.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "National Grid rejected the email or password.",
+      "cannot_connect": "Could not reach National Grid. Check your connection and try again.",
+      "no_accounts": "This login has no linked billing accounts.",
+      "unknown": "Unexpected error while signing in."
+    },
+    "abort": {
+      "already_configured": "This National Grid account is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Billing accounts",
+        "description": "Choose the billing accounts Home Assistant should track.",
+        "data": {
+          "selected_accounts": "Billing accounts"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "this_hour": { "name": "Usage this hour" },
+      "today": { "name": "Usage today" },
+      "yesterday": { "name": "Usage yesterday" },
+      "this_week": { "name": "Usage this week" },
+      "this_month": { "name": "Usage this month" },
+      "last_month": { "name": "Usage last month" }
+    },
+    "binary_sensor": {
+      "smart_meter": { "name": "Smart meter" }
+    },
+    "button": {
+      "refresh": { "name": "Refresh usage" }
+    }
+  }
+}
