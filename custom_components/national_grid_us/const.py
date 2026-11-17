@@ -13,6 +13,10 @@ PLATFORMS: Final = ("sensor", "binary_sensor", "button")
 
 CONF_SELECTED_ACCOUNTS: Final = "selected_accounts"
 
+# Why the last setup attempt failed, kept so diagnostics can explain it even
+# though the config entry never finished setting up.
+SETUP_ERRORS_KEY: Final = f"{DOMAIN}_setup_errors"
+
 # National Grid publishes new AMI readings roughly every hour and finalizes
 # them with a 1-2 day delay, so polling every 30 minutes is plenty.
 DEFAULT_UPDATE_INTERVAL: Final = timedelta(minutes=30)

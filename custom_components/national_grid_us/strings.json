@@ -26,6 +26,7 @@
     },
     "error": {
       "invalid_auth": "National Grid rejected the email or password.",
+      "auth_flow_failed": "National Grid's sign-in finished without returning a token. This usually means the account requires multi-factor authentication, which an integration cannot complete. Download diagnostics or run scripts/debug_nationalgrid.py for details.",
       "cannot_connect": "Could not reach National Grid. Check your connection and try again.",
       "no_accounts": "This login has no linked billing accounts.",
       "unknown": "Unexpected error while signing in."

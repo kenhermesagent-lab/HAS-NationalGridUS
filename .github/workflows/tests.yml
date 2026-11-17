@@ -23,9 +23,28 @@ jobs:
       - name: Install ruff
         run: pip install ruff==0.17.5
       - name: Lint
-        run: ruff check custom_components tests
+        run: ruff check custom_components tests scripts
       - name: Check formatting
-        run: ruff format --check custom_components tests
+        run: ruff format --check custom_components tests scripts
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # This repository is a custom HACS repository, so the checks that only
+          # apply to inclusion in the HACS default list are skipped.
+          ignore: brands description topics
 
   tests:
     name: Tests (${{ matrix.name }})
@@ -34,10 +53,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pinned, Python 3.12
-            python: "3.12"
+          - name: pinned Home Assistant
+            python: "3.13"
             requirements: requirements_test.txt
-          - name: latest Home Assistant, Python 3.13
+          - name: latest Home Assistant
             python: "3.13"
             requirements: requirements_test_latest.txt
     steps:

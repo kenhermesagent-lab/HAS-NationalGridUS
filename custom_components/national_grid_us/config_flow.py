@@ -13,27 +13,53 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 from py_nationalgrid import (
     CannotConnectError,
     GraphQLError,
     InvalidAuthError,
-    NationalGridClient,
     RetryExhaustedError,
 )
 
-from .api import create_client
+from .api import create_client, create_session
 from .const import CONF_SELECTED_ACCOUNTS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+# py-nationalgrid reports these when Azure AD B2C finishes the sign-in without
+# handing back a token. In practice that means the account needs interactive
+# multi-factor authentication, which an integration cannot complete.
+_AUTH_FLOW_MARKERS = ("authorization code", "access token")
+
+
+def _login_error(err: Exception) -> str:
+    """Map a login failure to a form error key."""
+    if isinstance(err, InvalidAuthError):
+        return "invalid_auth"
+    if isinstance(err, GraphQLError):
+        return "invalid_auth" if err.status in (401, 403) else "cannot_connect"
+    if isinstance(err, CannotConnectError):
+        message = str(err).lower()
+        if any(marker in message for marker in _AUTH_FLOW_MARKERS):
+            return "auth_flow_failed"
+        return "cannot_connect"
+    if isinstance(err, (RetryExhaustedError, TimeoutError)):
+        return "cannot_connect"
+    return "unknown"
+
 
 async def _async_get_accounts(
-    client: NationalGridClient,
+    hass: HomeAssistant, username: str, password: str
 ) -> list[str]:
-    """Log in and return the billing account numbers linked to the login."""
-    links = await client.get_linked_accounts()
+    """Log in with a dedicated session and return the linked account numbers."""
+    session = create_session()
+    try:
+        client = create_client(hass, username, password, session=session)
+        links = await client.get_linked_accounts()
+    finally:
+        await session.close()
+
     accounts = [
         str(link["billingAccountId"]) for link in links if link.get("billingAccountId")
     ]
@@ -74,22 +100,12 @@ class NationalGridConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             username = user_input[CONF_USERNAME].strip()
             password = user_input[CONF_PASSWORD]
-            client = create_client(self.hass, username, password)
             try:
-                accounts = await _async_get_accounts(client)
-            except InvalidAuthError:
-                errors["base"] = "invalid_auth"
-            except GraphQLError as err:
-                if err.status in (401, 403):
-                    errors["base"] = "invalid_auth"
-                else:
-                    _LOGGER.debug("National Grid login failed: %s", err)
-                    errors["base"] = "cannot_connect"
-            except (CannotConnectError, RetryExhaustedError, TimeoutError):
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error logging in to National Grid")
-                errors["base"] = "unknown"
+                accounts = await _async_get_accounts(self.hass, username, password)
+            except Exception as err:
+                errors["base"] = _login_error(err)
+                if errors["base"] == "unknown":
+                    _LOGGER.exception("Unexpected error logging in to National Grid")
             else:
                 if not accounts:
                     errors["base"] = "no_accounts"
@@ -157,16 +173,12 @@ class NationalGridConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             password = user_input[CONF_PASSWORD]
-            client = create_client(self.hass, username, password)
             try:
-                accounts = await _async_get_accounts(client)
-            except (InvalidAuthError, GraphQLError) as err:
-                if isinstance(err, GraphQLError) and err.status not in (401, 403):
-                    errors["base"] = "cannot_connect"
-                else:
-                    errors["base"] = "invalid_auth"
-            except (CannotConnectError, RetryExhaustedError, TimeoutError):
-                errors["base"] = "cannot_connect"
+                accounts = await _async_get_accounts(self.hass, username, password)
+            except Exception as err:
+                errors["base"] = _login_error(err)
+                if errors["base"] == "unknown":
+                    _LOGGER.exception("Unexpected error re-authenticating")
             else:
                 data = {**entry.data, CONF_PASSWORD: password}
                 selected = [
@@ -230,11 +242,9 @@ class NationalGridOptionsFlow(OptionsFlow):
         try:
             accounts |= set(
                 await _async_get_accounts(
-                    create_client(
-                        self.hass,
-                        self._entry.data[CONF_USERNAME],
-                        self._entry.data[CONF_PASSWORD],
-                    )
+                    self.hass,
+                    self._entry.data[CONF_USERNAME],
+                    self._entry.data[CONF_PASSWORD],
                 )
             )
         except Exception:

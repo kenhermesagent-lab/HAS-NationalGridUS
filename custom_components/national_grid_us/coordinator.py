@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, time, timedelta, tzinfo
 
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
@@ -87,6 +88,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
         entry: ConfigEntry,
         client: NationalGridClient,
         selected_accounts: set[str],
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Initialise the coordinator."""
         super().__init__(
@@ -98,6 +100,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
         self.entry = entry
         self.client = client
         self.selected_accounts = selected_accounts
+        self.session = session
         self._stats_warned: set[str] = set()
 
     async def async_force_refresh(self) -> None:

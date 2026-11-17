@@ -8,6 +8,7 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "after_dependencies": ["recorder"],
-  "requirements": ["py-nationalgrid==0.5.1"],
-  "version": "1.0.0"
+  "loggers": ["py_nationalgrid"],
+  "requirements": ["py-nationalgrid==0.6.8"],
+  "version": "1.1.0"
 }

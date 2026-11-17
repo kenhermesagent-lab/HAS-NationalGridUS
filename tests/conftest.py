@@ -19,9 +19,21 @@ pytest_plugins = "pytest_homeassistant_custom_component"
 # ``recorder_mock`` in the test signature keeps both working.
 
 
+class FakeSession:
+    """Stand-in for the aiohttp session the integration creates."""
+
+    def __init__(self) -> None:
+        """Initialise the fake."""
+        self.closed = False
+
+    async def close(self) -> None:
+        """Record that the session was closed."""
+        self.closed = True
+
+
 @pytest.fixture
 def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeNationalGridClient:
-    """Replace the real National Grid client with a fake one."""
+    """Replace the real National Grid client and session with fakes."""
     client = FakeNationalGridClient()
 
     monkeypatch.setattr(
@@ -31,5 +43,11 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeNationalGridClient:
     monkeypatch.setattr(
         "custom_components.national_grid_us.config_flow.create_client",
         lambda *args, **kwargs: client,
+    )
+    monkeypatch.setattr(
+        "custom_components.national_grid_us.create_session", FakeSession
+    )
+    monkeypatch.setattr(
+        "custom_components.national_grid_us.config_flow.create_session", FakeSession
     )
     return client

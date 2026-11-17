@@ -30,6 +30,14 @@ library.
 * Returns/exports (solar) kept in a separate return-to-grid series
 * Re-authentication and account re-selection from the UI
 
+## Requirements
+
+- Home Assistant **2025.2** or newer (Python 3.13), because
+  `py-nationalgrid` 0.6.8 requires Python 3.13
+- The `recorder` integration enabled, for long-term statistics
+- A National Grid login that can sign in **without interactive MFA** (see
+  [Login fails even though the website works](#login-fails-even-though-the-website-works))
+
 ## Installation
 
 ### HACS
@@ -137,6 +145,62 @@ logger:
 If no statistics appear, check that the `recorder` integration is enabled — long
 term statistics require it.
 
+### Login fails even though the website works
+
+This is almost always **multi-factor authentication**. You sign in to
+`myaccount.nationalgrid.com` interactively, so Azure AD B2C can prompt for a code;
+the integration signs in headlessly and cannot answer that prompt. National Grid
+reports this as a completed sign-in with no token, which the form shows as
+*"sign-in finished without returning a token"*.
+
+National Grid only requires MFA on some accounts. If yours does, the integration
+can't read your usage until it is turned off for that login, or National Grid
+offers a password-only path.
+
+To confirm what actually happened on your account:
+
+1. **Download diagnostics** (below) — it works even when setup failed, and shows
+the exact error.
+2. **Run the debug script** (below) — it adds the library's sign-in log and the
+raw API responses.
+
+### Downloading diagnostics
+
+**Settings → Devices & Services → National Grid US → ⋮ → Download diagnostics**.
+
+It is redacted: passwords, tokens and emails are removed, and account, meter,
+premise and service point numbers are replaced with stable `id:…` hashes (the
+same number always gets the same hash, so readings still line up). The download
+includes the setup error, coordinator state, per-meter point counts, recent
+values, and the last stored statistics row for each series — which is what to
+attach to an issue.
+
+### Debug script
+
+`scripts/debug_nationalgrid.py` runs outside Home Assistant with only
+`py-nationalgrid` installed, and dumps what the API returns:
+
+```bash
+pip install py-nationalgrid==0.6.8
+python scripts/debug_nationalgrid.py --days 7 --output ng-debug.json
+```
+
+It prints the library's sign-in log, every error with its type/message/HTTP
+status, a plain-language diagnosis, and the linked accounts, billing accounts,
+AMI usage and 15-minute interval payloads.
+
+| Flag | Effect |
+| --- | --- |
+| `--days N` | Days of AMI usage to request (default 7) |
+| `--account N` | Only inspect that billing account |
+| `--no-intervals` | Skip the 15-minute interval request |
+| `--show-ids` | Keep account/meter/premise numbers unmasked |
+| `--output FILE` | Write JSON to a file instead of stdout |
+
+Credentials come from `--username`/`--password`, `NG_USERNAME`/`NG_PASSWORD`, or
+a prompt, and are never written to the dump. Emails, passwords and tokens are
+always redacted. Exit code is `0` when the login worked, `2` when it failed.
+
 ## Development
 
 Tests run inside Home Assistant's own test harness
@@ -170,22 +234,19 @@ Covered by `tests/test_init.py`:
 
 ### Test environments
 
-Two Home Assistant versions are tested:
+Two Home Assistant versions are tested, both on Python 3.13 (required by
+`py-nationalgrid` 0.6.8):
 
-| Environment | Python | Requirements file | Home Assistant |
-| --- | --- | --- | --- |
-| Pinned | 3.12 | `requirements_test.txt` | 2025.1.4 |
-| Current | 3.13 | `requirements_test_latest.txt` | latest release (2026.2.x today) |
+| Environment | Requirements file | Home Assistant |
+| --- | --- | --- |
+| Pinned | `requirements_test.txt` | 2026.2.3 + harness 0.13.316 |
+| Latest | `requirements_test_latest.txt` | newest release (unpinned harness) |
 
-The pinned environment uses `pytest-homeassistant-custom-component==0.13.205`,
-the last harness release supporting Home Assistant 2025.1.x. The current
-environment installs the newest harness, so it also exercises the newer recorder
-statistics API (`unit_class`/`mean_type`) instead of
-`unit_of_measurement`/`has_mean`.
-
-GitHub Actions runs ruff and both environments on every push and pull request,
-see [`.github/workflows/tests.yml`](.github/workflows/tests.yml). To run the
-current environment locally:
+The pinned job is reproducible; the latest job exists to catch upstream breaks
+in Home Assistant or the harness. GitHub Actions runs ruff (including
+`scripts/`), hassfest, HACS validation and both test environments on every push
+and pull request, see [`.github/workflows/tests.yml`](.github/workflows/tests.yml).
+To run the latest environment locally:
 
 ```bash
 python3.13 -m venv .venv-latest
