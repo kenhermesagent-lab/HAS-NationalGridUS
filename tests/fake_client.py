@@ -49,6 +49,9 @@ class FakeNationalGridClient:
         self._check("get_billing_account")
         return {
             "premiseNumber": PREMISE,
+            "serviceAddress": {
+                "serviceAddressCompressed": "1 EXAMPLE ROAD, ANYTOWN, NY 11111"
+            },
             "regionAbbreviation": "NY",
             "meter": {
                 "nodes": [
@@ -96,6 +99,11 @@ class FakeNationalGridClient:
                 }
             )
         return reads
+
+    async def get_premise(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Return the premise that belongs to this meter."""
+        self._check("get_premise")
+        return [{"premiseNumber": str(PREMISE), "companyCode": "KEDLI"}]
 
     async def get_bills(self, account_number: str) -> list[dict[str, Any]]:
         """Return one billed statement for this month and the previous one."""

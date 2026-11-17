@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, time, timedelta, tzinfo
+from typing import Any
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -16,13 +18,13 @@ from py_nationalgrid import (
     GraphQLError,
     InvalidAuthError,
     NationalGridClient,
+    NationalGridError,
     RestAPIError,
     RetryExhaustedError,
 )
 
 from .const import (
     AMI_HISTORY_DAYS,
-    COMPANY_CODES,
     COST_SOURCE_BILLED,
     COST_SOURCE_ENERGY,
     DEFAULT_UPDATE_INTERVAL,
@@ -47,6 +49,20 @@ _METER_ERRORS = (
     TimeoutError,
 )
 
+# A cost lookup is a bonus on top of usage, so anything it can raise has to stay
+# inside the cost path. GraphQLError and DataExtractionError derive from
+# NationalGridError; ValueError is what the library raises for GraphQL errors in
+# the body, including a company code the API cannot parse as an enum literal.
+_COST_ERRORS = (
+    *_METER_ERRORS,
+    NationalGridError,
+    ValueError,
+    AttributeError,
+    KeyError,
+    TypeError,
+    aiohttp.ClientError,
+)
+
 
 def _utility_tz() -> tzinfo:
     """Return the timezone National Grid reports usage in."""
@@ -69,6 +85,34 @@ def _parse_local_date(value: object) -> date | None:
     if parsed.tzinfo is None:
         return parsed.date()
     return parsed.astimezone(_utility_tz()).date()
+
+
+def _parse_service_address(value: str) -> dict[str, str] | None:
+    """Split "1 Example Road, Anytown, NY 11111" for a premise lookup."""
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if len(parts) < 3:
+        return None
+    tail = re.fullmatch(r"([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)", parts[-1])
+    if tail is None:
+        return None
+    return {
+        "street_name": parts[0],
+        "city": parts[1],
+        "state": tail.group(1).upper(),
+        "zip_code": tail.group(2),
+    }
+
+
+def _select_company_code(
+    premises: list[dict[str, Any]], premise_number: str
+) -> str | None:
+    """Return the company code of the premise this meter belongs to."""
+    for premise in premises:
+        if str(premise.get("premiseNumber") or "") == premise_number and premise.get(
+            "companyCode"
+        ):
+            return str(premise["companyCode"])
+    return None
 
 
 def _parse_usage_month(value: object) -> date | None:
@@ -180,6 +224,12 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                 continue
 
             premise_number = billing_account.get("premiseNumber", "")
+            service_address = billing_account.get("serviceAddress") or {}
+            compressed_address = (
+                str(service_address.get("serviceAddressCompressed") or "")
+                if isinstance(service_address, dict)
+                else ""
+            )
             meter_nodes = [
                 node
                 for node in billing_account.get("meter", {}).get("nodes", [])
@@ -198,6 +248,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                         meter_info.get("hasAmiSmartMeter")
                         or meter_info.get("isSmartMeter")
                     ),
+                    service_address=compressed_address,
                 )
                 await self._async_fetch_usage(meter, single_meter=single_meter)
                 await self._async_fetch_cost(meter, single_meter=single_meter)
@@ -343,6 +394,29 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
     async def _async_fetch_cost(self, meter: MeterUsage, *, single_meter: bool) -> None:
         """Fill ``meter`` with the cost National Grid charged per month.
 
+        Cost is a bonus on top of usage, so nothing in here may fail a refresh.
+        """
+        try:
+            costs, sources = await self._async_collect_costs(
+                meter, single_meter=single_meter
+            )
+        except _COST_ERRORS:
+            # The API rejects an unparseable company-code literal with a
+            # ValueError, and a schema change would look the same from here.
+            # Usage must keep working regardless.
+            _LOGGER.exception("Unexpected error fetching cost for meter %s", meter.key)
+            return
+
+        meter.monthly_cost = costs
+        meter.cost_source = sources
+        if not costs:
+            _LOGGER.debug("No cost data for meter %s", meter.key)
+
+    async def _async_collect_costs(
+        self, meter: MeterUsage, *, single_meter: bool
+    ) -> tuple[dict[date, float], dict[date, str]]:
+        """Return the cost and its source per month.
+
         A statement is the whole bill for its period, so it wins wherever one
         exists. The cost endpoint reports the energy portion of the live billing
         period and fills in months no statement covers yet, because a month's
@@ -361,12 +435,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                 continue
             costs[month] = value
             sources[month] = COST_SOURCE_ENERGY
-
-        meter.monthly_cost = costs
-        meter.cost_source = sources
-
-        if not costs:
-            _LOGGER.debug("No cost data for meter %s", meter.key)
+        return costs, sources
 
     async def _async_bill_costs(self, meter: MeterUsage) -> dict[date, float]:
         """Return billed charges per statement month from the bill history."""
@@ -405,7 +474,9 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                 rows = await self.client.get_energy_usage_costs(
                     meter.account_id, query_date, company_code
                 )
-            except _METER_ERRORS as err:
+            except _COST_ERRORS as err:
+                # Includes the ValueError the library raises for rejected GraphQL
+                # variables, which is what a company code in the wrong form gives.
                 _LOGGER.debug(
                     "No cost rows for meter %s on %s: %s", meter.key, query_date, err
                 )
@@ -428,44 +499,44 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
         return costs
 
     async def _async_company_code(self, meter: MeterUsage) -> str | None:
-        """Return the company code the cost endpoint accepts for this account.
+        """Return the account's company code for the cost endpoint.
 
-        The code is required by the query and no endpoint the integration already
-        calls exposes it, so the known codes are tried and the first that answers
-        is remembered. A probe that finds nothing is NOT remembered: the account
-        may simply have no cost rows yet, and the next refresh (and any reload)
-        tries again rather than writing the endpoint off for good.
+        The query takes a GraphQL enum and the API rejects unknown literals, so
+        the code is read from the account's own premise rather than guessed. A
+        lookup that finds nothing is cheap and is not remembered, so the next
+        refresh and any reload try again.
         """
         cached = self._company_codes.get(meter.account_id)
         if cached is not None:
             return cached
 
-        today = dt_util.now(_utility_tz()).date()
-        for candidate in COMPANY_CODES:
+        address = _parse_service_address(meter.service_address)
+        if address is not None:
             try:
-                rows = await self.client.get_energy_usage_costs(
-                    meter.account_id, today, candidate
-                )
-            except _METER_ERRORS:
-                continue
-            if rows:
-                self._company_codes[meter.account_id] = candidate
+                premises = await self.client.get_premise(**address)
+            except _COST_ERRORS as err:
+                _LOGGER.debug("Premise lookup failed for meter %s: %s", meter.key, err)
+                premises = []
+
+            code = _select_company_code(premises, meter.premise_number)
+            if code is not None:
+                self._company_codes[meter.account_id] = code
                 _LOGGER.info(
-                    "National Grid's cost endpoint answered for meter %s with "
-                    "company code %s",
+                    "National Grid's cost endpoint will use company code %s for "
+                    "meter %s",
+                    code,
                     meter.key,
-                    candidate,
                 )
-                return candidate
+                return code
 
         if meter.key in self._cost_warned:
             _LOGGER.debug("Still no company code for meter %s", meter.key)
         else:
             self._cost_warned.add(meter.key)
             _LOGGER.warning(
-                "National Grid's cost endpoint accepted none of the known company "
-                "codes for meter %s, so only billed statements provide cost. This "
-                "is retried on every refresh.",
+                "Could not determine the National Grid company code for meter %s, "
+                "so cost comes from billed statements only. This is retried on "
+                "every refresh.",
                 meter.key,
             )
         return None

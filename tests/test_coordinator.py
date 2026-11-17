@@ -23,6 +23,14 @@ TZ = ZoneInfo("America/New_York")
 class FakeClient:
     """Minimal stand-in for py_nationalgrid.NationalGridClient."""
 
+    def __init__(self) -> None:
+        self.premise_calls = 0
+
+    async def get_premise(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Return no premise matches, so no company code is found."""
+        self.premise_calls += 1
+        return []
+
     async def get_bills(self, account_number: str) -> list[dict[str, Any]]:
         return []
 
@@ -40,6 +48,9 @@ class FakeClient:
     async def get_billing_account(self, account_number: str) -> dict[str, Any]:
         return {
             "premiseNumber": 555000111,
+            "serviceAddress": {
+                "serviceAddressCompressed": "1 EXAMPLE ROAD, ANYTOWN, NY 11111"
+            },
             "region": "NY",
             "meter": {
                 "nodes": [
@@ -92,6 +103,9 @@ class FakeGasClient(FakeClient):
     async def get_billing_account(self, account_number: str) -> dict[str, Any]:
         return {
             "premiseNumber": 555000111,
+            "serviceAddress": {
+                "serviceAddressCompressed": "1 EXAMPLE ROAD, ANYTOWN, NY 11111"
+            },
             "meter": {
                 "nodes": [
                     {
@@ -120,12 +134,16 @@ class FakeMonthlyClient(FakeClient):
     """A gas meter whose usage only exists as account-level monthly totals."""
 
     def __init__(self, meter_count: int = 1) -> None:
+        super().__init__()
         self._meter_count = meter_count
         self.monthly_request: tuple[str, int, int] | None = None
 
     async def get_billing_account(self, account_number: str) -> dict[str, Any]:
         return {
             "premiseNumber": 555000111,
+            "serviceAddress": {
+                "serviceAddressCompressed": "1 EXAMPLE ROAD, ANYTOWN, NY 11111"
+            },
             "meter": {
                 "nodes": [
                     {
@@ -178,6 +196,11 @@ class FakeBilledClient(FakeMonthlyClient):
 class FakeCostEndpointClient(FakeBilledClient):
     """A gas meter whose cost endpoint answers for one company code."""
 
+    async def get_premise(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Return the premise, which carries the company code."""
+        self.premise_calls += 1
+        return [{"premiseNumber": "555000111", "companyCode": "KEDLI"}]
+
     async def get_energy_usage_costs(
         self, account_number: str, query_date: Any, company_code: str, **kwargs: Any
     ) -> list[dict[str, Any]]:
@@ -197,6 +220,11 @@ class FakeCostEndpointClient(FakeBilledClient):
 
 class FakeOpenMonthClient(FakeMonthlyClient):
     """A gas meter whose current month has no statement yet."""
+
+    async def get_premise(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Return the premise, which carries the company code."""
+        self.premise_calls += 1
+        return [{"premiseNumber": "555000111", "companyCode": "KEDLI"}]
 
     def __init__(self, meter_count: int = 1) -> None:
         super().__init__(meter_count)
@@ -228,6 +256,27 @@ class FakeLateCodeClient(FakeOpenMonthClient):
     def __init__(self, meter_count: int = 1) -> None:
         super().__init__(meter_count)
         self.codes = set()
+
+    async def get_premise(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Only answer once the premise lookup starts returning a code."""
+        self.premise_calls += 1
+        if not self.codes:
+            return []
+        return [{"premiseNumber": "555000111", "companyCode": "KEDLI"}]
+
+
+class FakeBrokenCostClient(FakeBilledClient):
+    """A cost endpoint that rejects the request, as a bad enum literal does."""
+
+    async def get_premise(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.premise_calls += 1
+        return [{"premiseNumber": "555000111", "companyCode": "KEDLI"}]
+
+    async def get_energy_usage_costs(self, *args: Any, **kwargs: Any) -> list[Any]:
+        raise ValueError(
+            "GraphQL errors encountered: [{'message': 'CompanyCodeValue cannot "
+            "parse the given literal of type `EnumValueNode`.'}]"
+        )
 
 
 class FakeCoordinator:
@@ -370,8 +419,43 @@ async def test_energy_cost_fills_a_month_without_a_statement() -> None:
     }
 
 
-async def test_company_code_is_retried_after_a_failed_probe() -> None:
-    """A probe that found nothing must not be cached forever."""
+async def test_a_rejected_cost_request_does_not_break_the_refresh() -> None:
+    """A ValueError from the cost endpoint must not take usage down with it."""
+    coordinator = _build_coordinator(FakeBrokenCostClient())
+
+    data = await coordinator._async_update_data()
+
+    meter = data.meters["1234567890_888"]
+    # Usage is intact and billed cost still arrives.
+    assert meter.monthly != {}
+    assert meter.monthly_cost == {date(2026, 11, 1): 41.5, date(2026, 10, 1): 33.25}
+
+
+class FakeNoAddressClient(FakeBilledClient):
+    """An account whose stored address cannot be parsed for a premise lookup."""
+
+    async def get_billing_account(self, account_number: str) -> dict[str, Any]:
+        account = await super().get_billing_account(account_number)
+        account["serviceAddress"] = {"serviceAddressCompressed": "unknown"}
+        return account
+
+
+async def test_an_unparseable_address_skips_the_premise_lookup() -> None:
+    """No address means no lookup and no guessed literal."""
+    client = FakeNoAddressClient()
+    coordinator = _build_coordinator(client)
+
+    data = await coordinator._async_update_data()
+
+    assert client.premise_calls == 0
+    assert data.meters["1234567890_888"].monthly_cost == {
+        date(2026, 11, 1): 41.5,
+        date(2026, 10, 1): 33.25,
+    }
+
+
+async def test_company_code_is_retried_after_a_failed_lookup() -> None:
+    """A lookup that found nothing must not be cached forever."""
     client = FakeLateCodeClient()
     coordinator = _build_coordinator(client)
 

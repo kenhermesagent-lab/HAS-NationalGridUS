@@ -147,10 +147,15 @@ the same usage or cost would be counted twice.
   install backfills roughly 45 days, not years.
 * Bills report one total per statement with no fuel split, so they are only
   attributed to a meter when the account has a single meter.
-* The cost endpoint needs a company code that National Grid does not expose. The
-  known codes are tried, the one that answers is logged at **info** and reused.
-  A probe that finds nothing is never cached, so it is tried again on every
-  refresh and immediately after a reload or integration reload.
+* The cost endpoint takes a company code as a GraphQL enum, and the API rejects
+  unknown literals outright. The integration therefore reads the code from your
+  account's own premise — an address lookup that needs no extra credentials —
+  instead of guessing one. The code it finds is logged at **info** and reused;
+  a lookup that finds nothing is not cached, so it runs again on every refresh
+  and after any reload.
+* Cost can never fail the integration. Everything the cost endpoints raise stays
+  inside the cost path, so usage keeps updating even when cost cannot be
+  fetched; you get one warning naming the meter instead.
 * Gas meters do not expose interval reads; gas is daily or monthly only. A gas
   meter that publishes no AMI readings at all falls back to the account's
   monthly usage, so only **Usage this month** and **Usage last month** report

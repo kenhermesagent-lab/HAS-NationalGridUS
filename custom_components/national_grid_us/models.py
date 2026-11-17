@@ -20,6 +20,8 @@ class MeterUsage:
     meter_point_number: str
     fuel_type: str
     is_smart_meter: bool
+    # Single-line service address, used to look up the account's company code.
+    service_address: str = ""
     # Settled daily totals from the AMI GraphQL endpoint, keyed by local date.
     daily: dict[date, float] = field(default_factory=dict)
     # Near real-time 15-minute reads aggregated into local hours.

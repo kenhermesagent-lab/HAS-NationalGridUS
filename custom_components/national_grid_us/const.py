@@ -60,9 +60,9 @@ CURRENCY_USD: Final = "USD"
 COST_SOURCE_BILLED: Final = "billed"
 COST_SOURCE_ENERGY: Final = "energy"
 
-# Company codes accepted by the cost endpoint. The first one that answers for
-# an account is remembered, because the code is not exposed anywhere else.
-COMPANY_CODES: Final = ("KEDLI", "KEDNY", "NMPC", "NECO", "MECO", "NARR")
+# The cost endpoint takes a company code as a GraphQL enum. Unknown literals are
+# rejected by the API, so the code is read from the account's own premise (see
+# ``premise_company_code``) instead of being guessed.
 
 # National Grid reports usage in the timezone of the service address. Interval
 # reads are timezone aware; settled daily totals are bucketed in this zone.
