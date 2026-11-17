@@ -1,0 +1,5 @@
+# Tests against the newest Home Assistant release.
+# The harness version is deliberately unpinned so CI picks up current HA.
+# Requires Python 3.13+.
+py-nationalgrid==0.5.1
+pytest-homeassistant-custom-component

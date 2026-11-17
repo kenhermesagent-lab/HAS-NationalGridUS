@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -93,11 +92,11 @@ def _build_coordinator() -> NationalGridCoordinator:
     return coordinator
 
 
-def test_update_data_parses_usage() -> None:
+async def test_update_data_parses_usage() -> None:
     """AMI and interval payloads are parsed into daily and hourly usage."""
     coordinator = _build_coordinator()
 
-    data = asyncio.run(coordinator._async_update_data())
+    data = await coordinator._async_update_data()
 
     assert list(data.meters) == ["1234567890_777"]
     meter = data.meters["1234567890_777"]
@@ -113,10 +112,10 @@ def test_update_data_parses_usage() -> None:
     assert meter.hourly == {datetime(2026, 11, 17, 9, 0, tzinfo=TZ): 1.0}
 
 
-def test_sensor_values_and_periods() -> None:
+async def test_sensor_values_and_periods() -> None:
     """Sensors read the right period from the coordinator payload."""
     coordinator = _build_coordinator()
-    data = asyncio.run(coordinator._async_update_data())
+    data = await coordinator._async_update_data()
     stub = FakeCoordinator(data)
 
     today_sensor = NationalGridUsageSensor(stub, "1234567890_777", "today")  # type: ignore[arg-type]

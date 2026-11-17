@@ -168,6 +168,27 @@ Covered by `tests/test_init.py`:
 * unload closing the client and marking entities unavailable
 * the refresh button re-running the coordinator
 
-The harness pins Home Assistant 2025.1.4 because that is the release the latest
-`pytest-homeassistant-custom-component` supports. The integration itself also
-handles the newer recorder statistics API (`unit_class`/`mean_type`).
+### Test environments
+
+Two Home Assistant versions are tested:
+
+| Environment | Python | Requirements file | Home Assistant |
+| --- | --- | --- | --- |
+| Pinned | 3.12 | `requirements_test.txt` | 2025.1.4 |
+| Current | 3.13 | `requirements_test_latest.txt` | latest release (2026.2.x today) |
+
+The pinned environment uses `pytest-homeassistant-custom-component==0.13.205`,
+the last harness release supporting Home Assistant 2025.1.x. The current
+environment installs the newest harness, so it also exercises the newer recorder
+statistics API (`unit_class`/`mean_type`) instead of
+`unit_of_measurement`/`has_mean`.
+
+GitHub Actions runs ruff and both environments on every push and pull request,
+see [`.github/workflows/tests.yml`](.github/workflows/tests.yml). To run the
+current environment locally:
+
+```bash
+python3.13 -m venv .venv-latest
+.venv-latest/bin/pip install -r requirements_test_latest.txt
+.venv-latest/bin/python -m pytest
+```
