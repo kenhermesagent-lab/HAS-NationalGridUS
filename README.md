@@ -74,8 +74,9 @@ Each meter becomes a device with these sensors:
 | Usage this month | 1st of the month → now | kWh / CCF |
 | Usage last month | Previous calendar month | kWh / CCF |
 
-Plus a diagnostic **Smart meter** binary sensor and a **Refresh usage** button
-that forces an immediate re-fetch.
+Plus a diagnostic **Smart meter** binary sensor, which is on when that meter is
+returning readings, and a **Refresh usage** button that forces an immediate
+re-fetch.
 
 Gas meters report `CCF`; electricity meters report `kWh`. Both are the units
 National Grid's own portal uses.
@@ -124,6 +125,10 @@ statistics for the same meter, or the same usage will be counted twice.
 * National Grid keeps only about 45 days of AMI data in fast storage, so a fresh
   install backfills roughly 45 days, not years.
 * Gas meters do not expose interval reads; gas is daily or monthly only.
+* The account API leaves its smart-meter flag unset on some meters that do
+  report daily usage, gas meters in particular. The integration requests
+  readings for every meter and only uses the flag for diagnostics, so an off
+  smart-meter sensor does not mean the meter has no data.
 * Accounts using interactive MFA cannot sign in from an integration. Disable MFA
   for the account or use a password-only login if your account offers one.
 * Usage days are bucketed in `America/New_York`, the timezone National Grid

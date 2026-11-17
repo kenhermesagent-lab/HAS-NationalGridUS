@@ -102,6 +102,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
         self.selected_accounts = selected_accounts
         self.session = session
         self._stats_warned: set[str] = set()
+        self._usage_warned: set[str] = set()
 
     async def async_force_refresh(self) -> None:
         """Re-fetch everything and refresh listeners."""
@@ -180,12 +181,15 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
 
     async def _async_fetch_usage(self, meter: MeterUsage) -> None:
         """Fill ``meter`` with settled daily usage and recent hourly reads."""
-        if not meter.is_smart_meter or not meter.meter_number:
+        if not meter.meter_number:
             return
 
         tz = _utility_tz()
         today = dt_util.now(tz).date()
 
+        # National Grid serves daily AMI usage for gas meters as well, and does
+        # not set the smart-meter flags on every meter that reports readings, so
+        # ask for the data instead of trusting the flag.
         try:
             readings = await self.client.get_ami_energy_usages(
                 meter_number=meter.meter_number,
@@ -208,6 +212,20 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
             if day is None or quantity is None:
                 continue
             meter.daily[day] = meter.daily.get(day, 0.0) + float(quantity)
+
+        if meter.daily:
+            self._usage_warned.discard(meter.key)
+        elif meter.key not in self._usage_warned:
+            # A meter the portal shows readings for should not be silent, so say
+            # so once instead of hiding it behind a debug line.
+            self._usage_warned.add(meter.key)
+            _LOGGER.warning(
+                "National Grid returned no daily %s usage for meter %s in the "
+                "last %s days; the meter may not report AMI readings",
+                meter.fuel_type,
+                meter.key,
+                AMI_HISTORY_DAYS,
+            )
 
         if not meter.is_electric:
             # Gas meters do not expose interval reads; daily data is all there is.

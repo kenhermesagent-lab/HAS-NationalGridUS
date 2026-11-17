@@ -6,6 +6,9 @@ from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from custom_components.national_grid_us.binary_sensor import (
+    NationalGridSmartMeterSensor,
+)
 from custom_components.national_grid_us.coordinator import NationalGridCoordinator
 from custom_components.national_grid_us.models import NationalGridData
 from custom_components.national_grid_us.sensor import NationalGridUsageSensor
@@ -71,6 +74,36 @@ class FakeClient:
         ]
 
 
+class FakeGasClient(FakeClient):
+    """A gas meter that the account API does not flag as a smart meter."""
+
+    async def get_billing_account(self, account_number: str) -> dict[str, Any]:
+        return {
+            "premiseNumber": 555000111,
+            "meter": {
+                "nodes": [
+                    {
+                        "meterNumber": "M-2",
+                        "servicePointNumber": 888,
+                        "meterPointNumber": 2,
+                        "fuelType": "GAS",
+                        "isSmartMeter": False,
+                        "hasAmiSmartMeter": False,
+                    }
+                ]
+            },
+        }
+
+    async def get_ami_energy_usages(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {"date": "2026-11-15", "fuelType": "GAS", "quantity": 0.4},
+            {"date": "2026-11-16", "fuelType": "GAS", "quantity": 0.2},
+        ]
+
+    async def get_interval_reads(self, **kwargs: Any) -> list[dict[str, Any]]:
+        raise AssertionError("gas meters have no interval reads")
+
+
 class FakeCoordinator:
     """Coordinator stub for entity property tests."""
 
@@ -80,10 +113,14 @@ class FakeCoordinator:
         self.data = data
 
 
-def _build_coordinator() -> NationalGridCoordinator:
+def _build_coordinator(
+    client: Any | None = None,
+) -> NationalGridCoordinator:
     coordinator = object.__new__(NationalGridCoordinator)
-    coordinator.client = FakeClient()  # type: ignore[assignment]
+    coordinator.client = client or FakeClient()  # type: ignore[assignment]
     coordinator.selected_accounts = {"1234567890"}
+    coordinator._stats_warned = set()
+    coordinator._usage_warned = set()
 
     async def _noop_import(data: NationalGridData) -> None:
         return None
@@ -110,6 +147,30 @@ async def test_update_data_parses_usage() -> None:
 
     # Three 15-minute reads in the 09:00 hour become one bucket.
     assert meter.hourly == {datetime(2026, 11, 17, 9, 0, tzinfo=TZ): 1.0}
+
+
+async def test_update_data_fetches_usage_for_meter_without_smart_flag() -> None:
+    """A gas meter the API does not flag as smart still reports daily usage."""
+    coordinator = _build_coordinator(FakeGasClient())
+
+    data = await coordinator._async_update_data()
+
+    meter = data.meters["1234567890_888"]
+    assert meter.is_smart_meter is False
+    assert meter.unit == "CCF"
+    assert meter.daily == {date(2026, 11, 15): 0.4, date(2026, 11, 16): 0.2}
+    assert meter.hourly == {}
+
+
+async def test_binary_sensor_follows_available_readings() -> None:
+    """The diagnostic sensor reports received readings, not the API flag."""
+    data = await _build_coordinator(FakeGasClient())._async_update_data()
+    sensor = NationalGridSmartMeterSensor(
+        FakeCoordinator(data),
+        "1234567890_888",  # type: ignore[arg-type]
+    )
+
+    assert sensor.is_on is True
 
 
 async def test_sensor_values_and_periods() -> None:

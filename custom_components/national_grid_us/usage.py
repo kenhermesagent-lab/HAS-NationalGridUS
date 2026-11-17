@@ -42,8 +42,14 @@ def daily_totals(
     hourly: Mapping[datetime, float],
     tz: tzinfo,
 ) -> dict[date, float]:
-    """Combine settled daily totals and intraday hourly buckets per local day."""
-    totals = {day: float(value) for day, value in daily.items()}
+    """Combine settled daily totals and intraday hourly buckets per local day.
+
+    A day covered by hourly reads is taken from the hourly data alone, matching
+    what the statistics import does, so a settled daily total is never added on
+    top of the same day's 15-minute reads.
+    """
+    covered = {start.astimezone(tz).date() for start in hourly}
+    totals = {day: float(value) for day, value in daily.items() if day not in covered}
     for start, value in hourly.items():
         day = start.astimezone(tz).date()
         totals[day] = totals.get(day, 0.0) + float(value)

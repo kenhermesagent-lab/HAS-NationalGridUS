@@ -33,7 +33,7 @@ async def async_setup_entry(
 class NationalGridSmartMeterSensor(
     CoordinatorEntity[NationalGridCoordinator], BinarySensorEntity
 ):
-    """Whether a meter reports AMI (smart meter) interval data."""
+    """Whether a meter is reporting usage readings to the integration."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "smart_meter"
@@ -58,6 +58,11 @@ class NationalGridSmartMeterSensor(
 
     @property
     def is_on(self) -> bool:
-        """Return True when the meter exposes AMI interval data."""
+        """Return True when the meter has readings to report.
+
+        The account API's own smart-meter flag is unreliable (it is unset on gas
+        meters that do report daily usage), so this reports what the integration
+        actually received.
+        """
         meter = self.coordinator.data.meters.get(self._meter_key)
-        return bool(meter and meter.is_smart_meter)
+        return bool(meter and (meter.daily or meter.hourly))

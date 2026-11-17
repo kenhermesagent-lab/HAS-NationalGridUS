@@ -58,6 +58,20 @@ def test_daily_totals_combines_sources() -> None:
     assert totals[date(2026, 11, 16)] == 3.0
 
 
+def test_daily_totals_does_not_double_count_settled_days() -> None:
+    """A day with both a settled total and interval reads is counted once."""
+    daily = {date(2026, 11, 15): 9.0, date(2026, 11, 16): 4.0}
+    hourly = {
+        _dt("2026-11-16T10:00:00"): 1.0,
+        _dt("2026-11-16T11:00:00"): 2.0,
+    }
+
+    totals = daily_totals(daily, hourly, TZ)
+
+    assert totals[date(2026, 11, 16)] == 3.0  # hourly reads only
+    assert totals[date(2026, 11, 15)] == 9.0  # settled day kept
+
+
 def test_period_totals_cover_hour_day_week_month() -> None:
     """Period totals follow calendar boundaries, not rolling windows."""
     now = _dt("2026-11-17T10:30:00")
