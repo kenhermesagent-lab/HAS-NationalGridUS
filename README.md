@@ -124,7 +124,11 @@ statistics for the same meter, or the same usage will be counted twice.
 
 * National Grid keeps only about 45 days of AMI data in fast storage, so a fresh
   install backfills roughly 45 days, not years.
-* Gas meters do not expose interval reads; gas is daily or monthly only.
+* Gas meters do not expose interval reads; gas is daily or monthly only. A gas
+  meter that publishes no AMI readings at all falls back to the account's
+  monthly usage, so only **Usage this month** and **Usage last month** report
+  and the day/week/hour sensors stay at 0. That fallback applies only when the
+  account has a single meter, because those monthly totals carry no fuel type.
 * The account API leaves its smart-meter flag unset on some meters that do
   report daily usage, gas meters in particular. The integration requests
   readings for every meter and only uses the flag for diagnostics, so an off

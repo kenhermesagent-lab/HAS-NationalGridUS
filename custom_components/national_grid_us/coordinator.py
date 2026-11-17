@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     INTERVAL_HISTORY_DAYS,
+    MONTHLY_HISTORY_MONTHS,
     UTILITY_TIME_ZONE,
 )
 from .models import MeterUsage, NationalGridData
@@ -65,6 +66,24 @@ def _parse_local_date(value: object) -> date | None:
     if parsed.tzinfo is None:
         return parsed.date()
     return parsed.astimezone(_utility_tz()).date()
+
+
+def _parse_usage_month(value: object) -> date | None:
+    """Parse an ``energyUsages`` ``usageYearMonth`` into the month's first day."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        text = str(value)
+    elif isinstance(value, str):
+        text = value.strip()
+    else:
+        return None
+    if len(text) != 6 or not text.isdigit():
+        return None
+    year, month = int(text[:4]), int(text[4:])
+    if not 1 <= month <= 12:
+        return None
+    return date(year, month, 1)
 
 
 def _parse_local_datetime(value: object) -> datetime | None:
@@ -154,9 +173,12 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                 continue
 
             premise_number = billing_account.get("premiseNumber", "")
-            for meter_info in billing_account.get("meter", {}).get("nodes", []):
-                if not meter_info.get("servicePointNumber"):
-                    continue
+            meter_nodes = [
+                node
+                for node in billing_account.get("meter", {}).get("nodes", [])
+                if node.get("servicePointNumber")
+            ]
+            for meter_info in meter_nodes:
                 meter = MeterUsage(
                     account_id=account_id,
                     service_point=str(meter_info["servicePointNumber"]),
@@ -169,7 +191,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                         or meter_info.get("isSmartMeter")
                     ),
                 )
-                await self._async_fetch_usage(meter)
+                await self._async_fetch_usage(meter, single_meter=len(meter_nodes) == 1)
                 meters[meter.key] = meter
 
         if not meters and failures:
@@ -179,13 +201,37 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
         await self._async_import_statistics(data)
         return data
 
-    async def _async_fetch_usage(self, meter: MeterUsage) -> None:
-        """Fill ``meter`` with settled daily usage and recent hourly reads."""
+    async def _async_fetch_usage(
+        self, meter: MeterUsage, *, single_meter: bool
+    ) -> None:
+        """Fill ``meter`` with daily, hourly or, failing both, monthly usage."""
         if not meter.meter_number:
             return
 
         tz = _utility_tz()
         today = dt_util.now(tz).date()
+
+        await self._async_fetch_daily(meter, today)
+        if meter.is_electric:
+            await self._async_fetch_intervals(meter, today, tz)
+        if not meter.daily and not meter.hourly:
+            await self._async_fetch_monthly(meter, today, single_meter=single_meter)
+
+        if meter.has_readings:
+            self._usage_warned.discard(meter.key)
+        elif meter.key not in self._usage_warned:
+            # A meter the portal shows readings for should not be silent, so say
+            # so once instead of hiding it behind a debug line.
+            self._usage_warned.add(meter.key)
+            _LOGGER.warning(
+                "National Grid returned no usage for %s meter %s: the daily, "
+                "interval and monthly requests all came back empty",
+                meter.fuel_type,
+                meter.key,
+            )
+
+    async def _async_fetch_daily(self, meter: MeterUsage, today: date) -> None:
+        """Add settled daily AMI readings to ``meter``."""
 
         # National Grid serves daily AMI usage for gas meters as well, and does
         # not set the smart-meter flags on every meter that reports readings, so
@@ -206,6 +252,7 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
             )
             readings = []
 
+        meter.ami_rows = len(readings)
         for reading in readings:
             day = _parse_local_date(reading.get("date"))
             quantity = reading.get("quantity")
@@ -213,24 +260,13 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
                 continue
             meter.daily[day] = meter.daily.get(day, 0.0) + float(quantity)
 
-        if meter.daily:
-            self._usage_warned.discard(meter.key)
-        elif meter.key not in self._usage_warned:
-            # A meter the portal shows readings for should not be silent, so say
-            # so once instead of hiding it behind a debug line.
-            self._usage_warned.add(meter.key)
-            _LOGGER.warning(
-                "National Grid returned no daily %s usage for meter %s in the "
-                "last %s days; the meter may not report AMI readings",
-                meter.fuel_type,
-                meter.key,
-                AMI_HISTORY_DAYS,
-            )
+    async def _async_fetch_intervals(
+        self, meter: MeterUsage, today: date, tz: tzinfo
+    ) -> None:
+        """Add near real-time reads, bucketed into local hours.
 
-        if not meter.is_electric:
-            # Gas meters do not expose interval reads; daily data is all there is.
-            return
-
+        Only electricity meters publish interval reads; gas meters return none.
+        """
         start_day = today - timedelta(days=INTERVAL_HISTORY_DAYS)
         try:
             reads = await self.client.get_interval_reads(
@@ -253,6 +289,43 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
             intervals.append((start, float(value)))
 
         meter.hourly = bucket_to_hours(intervals, tz)
+
+    async def _async_fetch_monthly(
+        self, meter: MeterUsage, today: date, *, single_meter: bool
+    ) -> None:
+        """Add account-level monthly totals when the meter has no readings.
+
+        The ``energyUsages`` query is keyed by account and its rows carry no fuel
+        type, so they are only attributed to a meter when the account has exactly
+        one. That is what makes non-AMI gas meters, which publish nothing else,
+        report their CCF at all.
+        """
+        if not single_meter:
+            _LOGGER.debug(
+                "Skipping monthly usage for meter %s: the account has several "
+                "meters and the totals carry no fuel type",
+                meter.key,
+            )
+            return
+
+        first_month = (today.replace(day=1) - timedelta(days=366)).replace(day=1)
+        try:
+            rows = await self.client.get_energy_usages(
+                meter.account_id,
+                int(first_month.strftime("%Y%m")),
+                first=MONTHLY_HISTORY_MONTHS,
+            )
+        except _METER_ERRORS as err:
+            _LOGGER.debug("No monthly usage for meter %s: %s", meter.key, err)
+            return
+
+        meter.monthly_rows = len(rows)
+        for row in rows:
+            month = _parse_usage_month(row.get("usageYearMonth"))
+            usage = row.get("usage")
+            if month is None or usage is None:
+                continue
+            meter.monthly[month] = meter.monthly.get(month, 0.0) + float(usage)
 
     async def _async_import_statistics(self, data: NationalGridData) -> None:
         """Import usage into long term statistics, never failing the refresh."""

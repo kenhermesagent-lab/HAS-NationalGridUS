@@ -29,6 +29,11 @@ AMI_HISTORY_DAYS: Final = 45
 # a very short live window (the National Grid portal itself uses 24 hours).
 INTERVAL_HISTORY_DAYS: Final = 2
 
+# How many months of account-level usage to request when a meter has no AMI
+# readings. These totals carry no fuel type, so they are only attributed to a
+# meter when the account has exactly one.
+MONTHLY_HISTORY_MONTHS: Final = 13
+
 FUEL_ELECTRIC: Final = "ELECTRIC"
 FUEL_GAS: Final = "GAS"
 

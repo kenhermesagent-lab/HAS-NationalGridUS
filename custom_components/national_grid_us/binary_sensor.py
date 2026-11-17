@@ -65,4 +65,4 @@ class NationalGridSmartMeterSensor(
         actually received.
         """
         meter = self.coordinator.data.meters.get(self._meter_key)
-        return bool(meter and (meter.daily or meter.hourly))
+        return bool(meter and meter.has_readings)

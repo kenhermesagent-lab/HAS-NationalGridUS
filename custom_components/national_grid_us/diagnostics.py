@@ -35,6 +35,8 @@ def _meter_diagnostics(meter: MeterUsage) -> dict[str, Any]:
         "is_smart_meter": meter.is_smart_meter,
         "unit": meter.unit,
         "daily_points": len(daily),
+        "ami_rows": meter.ami_rows,
+        "monthly_rows": meter.monthly_rows,
         "daily_first": daily[0][0].isoformat() if daily else None,
         "daily_last": daily[-1][0].isoformat() if daily else None,
         "daily_total": round(sum(value for _, value in daily), 3),
@@ -43,6 +45,11 @@ def _meter_diagnostics(meter: MeterUsage) -> dict[str, Any]:
         "hourly_first": hourly[0][0].isoformat() if hourly else None,
         "hourly_last": hourly[-1][0].isoformat() if hourly else None,
         "recent_hourly": {start.isoformat(): value for start, value in hourly[-6:]},
+        "monthly_points": len(meter.monthly),
+        "recent_monthly": {
+            month.isoformat(): value
+            for month, value in sorted(meter.monthly.items())[-6:]
+        },
         "statistic_ids": [
             mask_numbers(statistics_id(meter)),
             mask_numbers(statistics_id(meter, returning=True)),

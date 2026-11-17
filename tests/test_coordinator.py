@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from custom_components.national_grid_us.binary_sensor import (
     NationalGridSmartMeterSensor,
 )
+from custom_components.national_grid_us.const import MONTHLY_HISTORY_MONTHS
 from custom_components.national_grid_us.coordinator import NationalGridCoordinator
 from custom_components.national_grid_us.models import NationalGridData
 from custom_components.national_grid_us.sensor import NationalGridUsageSensor
@@ -104,6 +105,46 @@ class FakeGasClient(FakeClient):
         raise AssertionError("gas meters have no interval reads")
 
 
+class FakeMonthlyClient(FakeClient):
+    """A gas meter whose usage only exists as account-level monthly totals."""
+
+    def __init__(self, meter_count: int = 1) -> None:
+        self._meter_count = meter_count
+        self.monthly_request: tuple[str, int, int] | None = None
+
+    async def get_billing_account(self, account_number: str) -> dict[str, Any]:
+        return {
+            "premiseNumber": 555000111,
+            "meter": {
+                "nodes": [
+                    {
+                        "meterNumber": f"M-{index}",
+                        "servicePointNumber": 888 + index,
+                        "meterPointNumber": index,
+                        "fuelType": "GAS",
+                        "isSmartMeter": False,
+                        "hasAmiSmartMeter": False,
+                    }
+                    for index in range(self._meter_count)
+                ]
+            },
+        }
+
+    async def get_ami_energy_usages(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+    async def get_energy_usages(
+        self, account_number: str, from_month: int, first: int = 12, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        self.monthly_request = (account_number, from_month, first)
+        return [
+            {"usage": 12.5, "usageType": "ACTUAL", "usageYearMonth": 202610},
+            {"usage": 3.5, "usageType": "ACTUAL", "usageYearMonth": 202611},
+            {"usage": None, "usageType": "ESTIMATED", "usageYearMonth": 202609},
+            {"usage": 99.0, "usageType": "ACTUAL", "usageYearMonth": "2026-13"},
+        ]
+
+
 class FakeCoordinator:
     """Coordinator stub for entity property tests."""
 
@@ -160,6 +201,35 @@ async def test_update_data_fetches_usage_for_meter_without_smart_flag() -> None:
     assert meter.unit == "CCF"
     assert meter.daily == {date(2026, 11, 15): 0.4, date(2026, 11, 16): 0.2}
     assert meter.hourly == {}
+
+
+async def test_monthly_usage_fills_in_for_meter_without_ami_readings() -> None:
+    """A non-AMI gas meter reports its CCF from account monthly totals."""
+    client = FakeMonthlyClient()
+    coordinator = _build_coordinator(client)
+
+    data = await coordinator._async_update_data()
+
+    meter = data.meters["1234567890_888"]
+    assert meter.daily == {}
+    assert meter.hourly == {}
+    assert meter.ami_rows == 0
+    assert meter.monthly_rows == 4
+    # Junk months and rows without a usage value are dropped.
+    assert meter.monthly == {date(2026, 10, 1): 12.5, date(2026, 11, 1): 3.5}
+    assert client.monthly_request is not None
+    assert client.monthly_request[0] == "1234567890"
+    assert client.monthly_request[2] == MONTHLY_HISTORY_MONTHS
+
+
+async def test_monthly_usage_is_not_spread_over_several_meters() -> None:
+    """Account-level totals are not attributed when the account has two meters."""
+    coordinator = _build_coordinator(FakeMonthlyClient(meter_count=2))
+
+    data = await coordinator._async_update_data()
+
+    assert len(data.meters) == 2
+    assert all(meter.monthly == {} for meter in data.meters.values())
 
 
 async def test_binary_sensor_follows_available_readings() -> None:

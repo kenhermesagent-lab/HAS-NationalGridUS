@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, cast
 
 from homeassistant.components.recorder import get_instance
@@ -118,6 +118,15 @@ def _split_points(
         raw[local_midnight(day, tz)] = value
     for start, value in meter.hourly.items():
         raw[start] = value
+
+    # Meters without AMI readings report one figure per calendar month, imported
+    # at the start of that month unless finer-grained readings already cover it.
+    covered_days = interval_days | set(meter.daily)
+    for month, value in meter.monthly.items():
+        month_end = (month + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        if any(month <= day <= month_end for day in covered_days):
+            continue
+        raw[local_midnight(month, tz)] = value
 
     consumption: dict[datetime, float] = {}
     returned: dict[datetime, float] = {}

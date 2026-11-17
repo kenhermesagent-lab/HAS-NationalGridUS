@@ -24,6 +24,12 @@ class MeterUsage:
     daily: dict[date, float] = field(default_factory=dict)
     # Near real-time 15-minute reads aggregated into local hours.
     hourly: dict[datetime, float] = field(default_factory=dict)
+    # One total per calendar month, keyed at the first of the month. Used when
+    # the meter publishes no AMI readings at all (non-AMI gas meters).
+    monthly: dict[date, float] = field(default_factory=dict)
+    # Rows each endpoint returned, kept for diagnostics.
+    ami_rows: int = 0
+    monthly_rows: int = 0
 
     @property
     def key(self) -> str:
@@ -45,9 +51,16 @@ class MeterUsage:
         """Return the statistics unit class for this meter."""
         return fuel_unit_class(self.fuel_type)
 
+    @property
+    def has_readings(self) -> bool:
+        """Return True when the meter returned any usage at all."""
+        return bool(self.daily or self.hourly or self.monthly)
+
     def period_totals(self, tz: tzinfo, now: datetime) -> PeriodTotals:
         """Return the hourly/daily/weekly/monthly totals for this meter."""
-        return compute_period_totals(self.daily, self.hourly, tz, now)
+        return compute_period_totals(
+            self.daily, self.hourly, tz, now, monthly=self.monthly
+        )
 
 
 @dataclass(slots=True)

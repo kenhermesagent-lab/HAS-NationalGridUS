@@ -101,6 +101,33 @@ def test_period_totals_cover_hour_day_week_month() -> None:
     assert totals.last_month_start == date(2026, 10, 1)
 
 
+def test_period_totals_use_monthly_figures_without_daily_readings() -> None:
+    """Month periods fall back to the single monthly figure."""
+    monthly = {date(2026, 10, 1): 40.0, date(2026, 11, 1): 12.0}
+
+    totals = compute_period_totals(
+        {}, {}, TZ, _dt("2026-11-17T10:30:00"), monthly=monthly
+    )
+
+    assert totals.this_month == 12.0
+    assert totals.last_month == 40.0
+    assert totals.today == 0.0
+    assert totals.this_week == 0.0
+
+
+def test_period_totals_prefer_daily_readings_over_monthly() -> None:
+    """A day-level reading wins over the month's single figure."""
+    totals = compute_period_totals(
+        {date(2026, 11, 16): 2.0},
+        {},
+        TZ,
+        _dt("2026-11-17T10:30:00"),
+        monthly={date(2026, 11, 1): 12.0},
+    )
+
+    assert totals.this_month == 2.0
+
+
 def test_period_totals_without_data_are_zero() -> None:
     """A meter with no readings reports zeros rather than failing."""
     totals = compute_period_totals({}, {}, TZ, _dt("2026-11-17T10:30:00"))

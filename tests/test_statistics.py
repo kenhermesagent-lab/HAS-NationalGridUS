@@ -55,6 +55,31 @@ def test_split_points_skips_days_covered_by_intervals() -> None:
     assert returned == {}
 
 
+def test_split_points_imports_monthly_figures_without_daily_readings() -> None:
+    """A meter with only monthly totals imports one point per month."""
+    meter = _meter(monthly={date(2026, 10, 1): 40.0})
+
+    consumption, returned = _split_points(meter, TZ)
+
+    assert consumption == {datetime(2026, 10, 1, tzinfo=TZ): 40.0}
+    assert returned == {}
+
+
+def test_split_points_skips_months_covered_by_daily_readings() -> None:
+    """A monthly figure is not imported on top of settled days in that month."""
+    meter = _meter(
+        daily={date(2026, 10, 5): 4.0},
+        monthly={date(2026, 10, 1): 40.0, date(2026, 9, 1): 30.0},
+    )
+
+    consumption, _returned = _split_points(meter, TZ)
+
+    assert consumption == {
+        datetime(2026, 10, 5, tzinfo=TZ): 4.0,
+        datetime(2026, 9, 1, tzinfo=TZ): 30.0,
+    }
+
+
 def test_split_points_separates_export() -> None:
     """Negative readings go to the return-to-grid series as positive values."""
     meter = _meter(
