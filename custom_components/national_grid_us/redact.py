@@ -19,7 +19,9 @@ _INLINE_ID_RE = re.compile(r"\d{3,}")
 # The same identifiers also show up inside URLs and API error strings, glued to
 # punctuation such as billing-1234567890. Numbers that must survive are matched
 # first - ISO dates and timestamps, bare clock times and decimal readings - and
-# any run of six or more digits left in the gaps is an identifier.
+# what is left is treated as an identifier using the same threshold as
+# redact_payload() uses for whole values: three or more digits. Runs attached to
+# letters or digits, such as the AADB2C90255 error code, are not identifiers.
 # The outer group is required: re.split() drops the matched text unless the
 # pattern captures it, and these numbers must survive the split.
 _KEEP_NUMERIC_RE = re.compile(
@@ -30,10 +32,10 @@ _KEEP_NUMERIC_RE = re.compile(
     r"|\d+\.\d+"  # decimal reading
     ")"
 )
-_LONG_DIGITS_RE = re.compile(r"\d{6,}")
+_IDENTIFIER_RUN_RE = re.compile(r"(?<![A-Za-z0-9])\d{3,}(?![A-Za-z0-9])")
 
 # Bumped whenever the shape of a redacted dump changes.
-REDACTION_VERSION = 3
+REDACTION_VERSION = 4
 
 SECRET_KEYS = frozenset(
     {
@@ -72,7 +74,7 @@ def _mask_identifiers(text: str) -> str:
     # The captured protected numbers land on the odd indexes, so only the gaps
     # between them are searched for identifiers.
     for index in range(0, len(pieces), 2):
-        pieces[index] = _LONG_DIGITS_RE.sub(
+        pieces[index] = _IDENTIFIER_RUN_RE.sub(
             lambda match: mask_identifier(match.group()), pieces[index]
         )
     return "".join(pieces)

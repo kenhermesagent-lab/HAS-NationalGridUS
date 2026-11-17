@@ -67,6 +67,47 @@ async def _async_get_accounts(
     return sorted(dict.fromkeys(accounts))
 
 
+def reauth_password_schema() -> vol.Schema:
+    """Return the password form shared by reauth and the repair flow."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_PASSWORD): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            )
+        }
+    )
+
+
+async def async_reauthenticate_entry(
+    hass: HomeAssistant, entry: ConfigEntry, password: str
+) -> str | None:
+    """Apply a new password to an entry, returning an error key on failure.
+
+    The config flow's reauth step and the repair flow both call this, so a
+    password is validated, filtered against the linked accounts and applied in
+    exactly one place.
+    """
+    try:
+        accounts = await _async_get_accounts(hass, entry.data[CONF_USERNAME], password)
+    except Exception as err:  # Any login failure is returned to the form, never raised.
+        base = _login_error(err)
+        if base == "unknown":
+            _LOGGER.exception("Unexpected error re-authenticating National Grid US")
+        return base
+
+    data = {**entry.data, CONF_PASSWORD: password}
+    selected = [
+        account
+        for account in data.get(CONF_SELECTED_ACCOUNTS, [])
+        if account in accounts
+    ]
+    if selected:
+        data[CONF_SELECTED_ACCOUNTS] = selected
+    hass.config_entries.async_update_entry(entry, data=data)
+    await hass.config_entries.async_reload(entry.entry_id)
+    return None
+
+
 def _account_selector(accounts: list[str]) -> selector.SelectSelector:
     """Build the multi-select used to pick billing accounts."""
     return selector.SelectSelector(
@@ -173,37 +214,16 @@ class NationalGridConfigFlow(ConfigFlow, domain=DOMAIN):
         username = entry.data[CONF_USERNAME]
 
         if user_input is not None:
-            password = user_input[CONF_PASSWORD]
-            try:
-                accounts = await _async_get_accounts(self.hass, username, password)
-            except Exception as err:
-                errors["base"] = _login_error(err)
-                if errors["base"] == "unknown":
-                    _LOGGER.exception("Unexpected error re-authenticating")
-            else:
-                data = {**entry.data, CONF_PASSWORD: password}
-                selected = [
-                    account
-                    for account in data.get(CONF_SELECTED_ACCOUNTS, [])
-                    if account in accounts
-                ]
-                if selected:
-                    data[CONF_SELECTED_ACCOUNTS] = selected
-                self.hass.config_entries.async_update_entry(entry, data=data)
-                await self.hass.config_entries.async_reload(entry.entry_id)
+            error = await async_reauthenticate_entry(
+                self.hass, entry, user_input[CONF_PASSWORD]
+            )
+            if error is None:
                 return self.async_abort(reason="reauth_successful")
+            errors["base"] = error
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_PASSWORD): selector.TextSelector(
-                        selector.TextSelectorConfig(
-                            type=selector.TextSelectorType.PASSWORD
-                        )
-                    )
-                }
-            ),
+            data_schema=reauth_password_schema(),
             description_placeholders={CONF_USERNAME: username},
             errors=errors,
         )

@@ -103,6 +103,28 @@ def test_text_masks_identifiers_glued_to_punctuation() -> None:
     assert "1234567.89 kWh" in redacted
 
 
+def test_text_masks_short_identifiers_like_payload_values() -> None:
+    """Three to five digit premise and service point numbers are masked too."""
+    text = (
+        "premise 555, service point 777, meter M-1, account 1234567890, "
+        "error AADB2C90255"
+    )
+
+    redacted = redact_text(text)
+
+    assert "555" not in redacted
+    assert "777" not in redacted
+    assert "1234567890" not in redacted
+    assert redacted.count("id:") == 3
+    # Same placeholders as the payload masking, so text and dump agree.
+    assert mask_identifier("555") in redacted
+    assert mask_identifier("777") in redacted
+    assert redact_payload({"premise": "555"})["premise"] == mask_identifier("555")
+    # Tokens that merely contain digits are error codes, not identifiers.
+    assert "AADB2C90255" in redacted
+    assert "M-1" in redacted
+
+
 def test_text_keeps_identifiers_when_ids_are_shown() -> None:
     """--show-ids keeps identifiers but still removes secrets."""
     text = "account 1234567890 for someone@example.com"
