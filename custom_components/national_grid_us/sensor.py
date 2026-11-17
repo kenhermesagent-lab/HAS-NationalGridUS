@@ -17,6 +17,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    COST_SOURCE_BILLED,
+    COST_SOURCE_ENERGY,
     CURRENCY_USD,
     DOMAIN,
     MANUFACTURER,
@@ -241,3 +243,29 @@ class NationalGridCostSensor(CoordinatorEntity[NationalGridCoordinator], SensorE
     def last_reset(self) -> datetime | None:
         """Return the start of the month this sensor resets on."""
         return local_midnight(self._month_start(), _utility_tz())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        """Say what the figure covers, because the two kinds are not comparable."""
+        meter = self._meter
+        if meter is None:
+            return None
+        month = self._month_start()
+        source = meter.cost_source.get(month)
+        if source == COST_SOURCE_BILLED:
+            detail = (
+                "Billed total for the statement: usage plus delivery, supply "
+                "and fixed charges"
+            )
+        elif source == COST_SOURCE_ENERGY:
+            detail = (
+                "Energy cost only for the billing period so far, before the "
+                "statement is issued; it excludes delivery and fixed charges"
+            )
+        else:
+            detail = "National Grid has not reported cost for this month yet"
+        return {
+            "cost_month": month.isoformat(),
+            "cost_source": source or "none",
+            "cost_source_detail": detail,
+        }

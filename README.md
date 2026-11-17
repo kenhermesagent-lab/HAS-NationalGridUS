@@ -73,7 +73,7 @@ Each meter becomes a device with these sensors:
 | Usage this week | Monday → now | kWh / CCF |
 | Usage this month | 1st of the month → now | kWh / CCF |
 | Usage last month | Previous calendar month | kWh / therm |
-| Usage cost this month | Current calendar month | USD |
+| Usage cost this month | Current calendar month; `cost_source` says whether it is a billed total or energy only | USD |
 
 Plus a diagnostic **Smart meter** binary sensor, which is on when that meter is
 returning readings, and a **Refresh usage** button that forces an immediate
@@ -127,11 +127,15 @@ the same usage or cost would be counted twice.
 * **Hourly usage** comes from the near real-time interval endpoint, which serves
   roughly the last two days of 15-minute reads. These are summed into hourly
   buckets.
-* **Cost** comes from the bill history, one total per statement, and from the
-  cost endpoint, which reports per-day amounts for a single fuel in the live and
-  previous billing period. Where both cover the same month, the cost endpoint
-  wins. Cost is imported as its own monthly series so the Energy dashboard's gas
-  cost field has a source.
+* **Cost** comes from two places that do not measure the same thing. A bill
+  statement is the **billed total** for its period: usage plus delivery, supply,
+  fixed charges and surcharges. The cost endpoint reports **energy cost only**
+  for the live and previous billing period, so it is only used for months no
+  statement covers yet, and those months are marked as `energy` in the sensor's
+  `cost_source` attribute and in diagnostics. A statement always wins.
+* Only billed totals are imported into the cost statistics series. An
+  energy-only figure covers part of a period and excludes the fixed charges, so
+  mixing the two in one cumulative series would make both meaningless.
 * A day that already has interval coverage is *not* also imported from the
   settled daily total, so nothing is counted twice.
 * Statistics are append-only and cumulative: only readings newer than the last
@@ -141,11 +145,12 @@ the same usage or cost would be counted twice.
 
 * National Grid keeps only about 45 days of AMI data in fast storage, so a fresh
   install backfills roughly 45 days, not years.
-* Cost comes from the bill history, which reports one total per statement with
-  no fuel split, so it is only attributed when the account has a single meter.
-  The fuel-specific cost endpoint covers only the live and previous billing
-  period, and it needs a company code that National Grid does not expose; the
-  known codes are tried once and the winner is remembered.
+* Bills report one total per statement with no fuel split, so they are only
+  attributed to a meter when the account has a single meter.
+* The cost endpoint needs a company code that National Grid does not expose. The
+  known codes are tried, the one that answers is logged at **info** and reused.
+  A probe that finds nothing is never cached, so it is tried again on every
+  refresh and immediately after a reload or integration reload.
 * Gas meters do not expose interval reads; gas is daily or monthly only. A gas
   meter that publishes no AMI readings at all falls back to the account's
   monthly usage, so only **Usage this month** and **Usage last month** report

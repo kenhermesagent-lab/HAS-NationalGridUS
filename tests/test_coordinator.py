@@ -195,6 +195,41 @@ class FakeCostEndpointClient(FakeBilledClient):
         ]
 
 
+class FakeOpenMonthClient(FakeMonthlyClient):
+    """A gas meter whose current month has no statement yet."""
+
+    def __init__(self, meter_count: int = 1) -> None:
+        super().__init__(meter_count)
+        self.codes: set[str] = {"KEDLI"}
+
+    async def get_bills(self, account_number: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "statementDate": "2026-10-05T00:00:00-05:00",
+                "currentChargesAmount": 33.25,
+                "status": "PAID",
+            }
+        ]
+
+    async def get_energy_usage_costs(
+        self, account_number: str, query_date: Any, company_code: str, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        if company_code not in self.codes:
+            return []
+        return [
+            {"date": "2026-11-10", "fuelType": "GAS", "amount": 5.5, "month": 202611},
+            {"date": "2026-11-11", "fuelType": "GAS", "amount": 1.5, "month": 202611},
+        ]
+
+
+class FakeLateCodeClient(FakeOpenMonthClient):
+    """A gas meter whose cost endpoint starts answering only later."""
+
+    def __init__(self, meter_count: int = 1) -> None:
+        super().__init__(meter_count)
+        self.codes = set()
+
+
 class FakeCoordinator:
     """Coordinator stub for entity property tests."""
 
@@ -213,6 +248,7 @@ def _build_coordinator(
     coordinator._stats_warned = set()
     coordinator._usage_warned = set()
     coordinator._company_codes = {}
+    coordinator._cost_warned = set()
 
     async def _noop_import(data: NationalGridData) -> None:
         return None
@@ -299,18 +335,56 @@ async def test_cost_comes_from_bills_for_a_single_meter_account() -> None:
 
     meter = data.meters["1234567890_888"]
     assert meter.monthly_cost == {date(2026, 11, 1): 41.5, date(2026, 10, 1): 33.25}
+    assert meter.cost_source == {
+        date(2026, 11, 1): "billed",
+        date(2026, 10, 1): "billed",
+    }
     assert meter.cost_rows == 3
 
 
-async def test_cost_endpoint_wins_for_the_months_it_covers() -> None:
-    """Fuel-specific daily costs replace the account's billed total."""
+async def test_a_statement_beats_the_energy_endpoint() -> None:
+    """A billed total wins over the energy-only figure for the same month."""
     coordinator = _build_coordinator(FakeCostEndpointClient())
 
     data = await coordinator._async_update_data()
 
     meter = data.meters["1234567890_888"]
-    # November comes from the fuel-specific endpoint, October from the bill.
+    assert meter.monthly_cost == {date(2026, 10, 1): 33.25, date(2026, 11, 1): 41.5}
+    assert meter.cost_source == {
+        date(2026, 10, 1): "billed",
+        date(2026, 11, 1): "billed",
+    }
+
+
+async def test_energy_cost_fills_a_month_without_a_statement() -> None:
+    """An open month is energy-only, and says so."""
+    coordinator = _build_coordinator(FakeOpenMonthClient())
+
+    data = await coordinator._async_update_data()
+
+    meter = data.meters["1234567890_888"]
     assert meter.monthly_cost == {date(2026, 10, 1): 33.25, date(2026, 11, 1): 7.0}
+    assert meter.cost_source == {
+        date(2026, 10, 1): "billed",
+        date(2026, 11, 1): "energy",
+    }
+
+
+async def test_company_code_is_retried_after_a_failed_probe() -> None:
+    """A probe that found nothing must not be cached forever."""
+    client = FakeLateCodeClient()
+    coordinator = _build_coordinator(client)
+
+    first = await coordinator._async_update_data()
+    # No code answered, so the open month has no cost yet.
+    assert first.meters["1234567890_888"].monthly_cost == {date(2026, 10, 1): 33.25}
+
+    client.codes = {"KEDLI"}
+    second = await coordinator._async_update_data()
+
+    meter = second.meters["1234567890_888"]
+    assert meter.monthly_cost == {date(2026, 10, 1): 33.25, date(2026, 11, 1): 7.0}
+    assert meter.cost_source[date(2026, 11, 1)] == "energy"
 
 
 async def test_billed_cost_is_not_attributed_to_a_multi_meter_account() -> None:
@@ -320,6 +394,7 @@ async def test_billed_cost_is_not_attributed_to_a_multi_meter_account() -> None:
     data = await coordinator._async_update_data()
 
     assert all(meter.monthly_cost == {} for meter in data.meters.values())
+    assert all(meter.cost_source == {} for meter in data.meters.values())
 
 
 async def test_binary_sensor_follows_available_readings() -> None:

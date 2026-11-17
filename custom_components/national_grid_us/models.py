@@ -27,8 +27,10 @@ class MeterUsage:
     # One total per calendar month, keyed at the first of the month. Used when
     # the meter publishes no AMI readings at all (non-AMI gas meters).
     monthly: dict[date, float] = field(default_factory=dict)
-    # Billed cost per calendar month in USD, keyed at the first of the month.
+    # Cost per calendar month in USD, keyed at the first of the month.
     monthly_cost: dict[date, float] = field(default_factory=dict)
+    # What each month's figure covers: a whole billed statement or energy only.
+    cost_source: dict[date, str] = field(default_factory=dict)
     # Rows each endpoint returned, kept for diagnostics.
     ami_rows: int = 0
     monthly_rows: int = 0

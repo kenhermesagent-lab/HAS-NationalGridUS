@@ -23,6 +23,8 @@ from py_nationalgrid import (
 from .const import (
     AMI_HISTORY_DAYS,
     COMPANY_CODES,
+    COST_SOURCE_BILLED,
+    COST_SOURCE_ENERGY,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     INTERVAL_HISTORY_DAYS,
@@ -124,7 +126,9 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
         self._stats_warned: set[str] = set()
         self._usage_warned: set[str] = set()
         # Company code that answered the cost endpoint, per billing account.
-        self._company_codes: dict[str, str | None] = {}
+        # Only successes are stored, so a probe that found nothing runs again.
+        self._company_codes: dict[str, str] = {}
+        self._cost_warned: set[str] = set()
 
     async def async_force_refresh(self) -> None:
         """Re-fetch everything and refresh listeners."""
@@ -337,18 +341,29 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
             )
 
     async def _async_fetch_cost(self, meter: MeterUsage, *, single_meter: bool) -> None:
-        """Fill ``meter`` with the cost National Grid billed per month.
+        """Fill ``meter`` with the cost National Grid charged per month.
 
-        Bills carry one total per statement with no fuel split, so they are only
-        used when the meter is the account's only one. The cost endpoint is
-        fuel-specific and covers the live billing period, so it wins for any
-        month it reports.
+        A statement is the whole bill for its period, so it wins wherever one
+        exists. The cost endpoint reports the energy portion of the live billing
+        period and fills in months no statement covers yet, because a month's
+        figure changes meaning when its statement arrives and the difference has
+        to be visible.
         """
         costs: dict[date, float] = {}
+        sources: dict[date, str] = {}
         if single_meter:
-            costs.update(await self._async_bill_costs(meter))
-        costs.update(await self._async_period_costs(meter))
+            for month, value in (await self._async_bill_costs(meter)).items():
+                costs[month] = value
+                sources[month] = COST_SOURCE_BILLED
+
+        for month, value in (await self._async_period_costs(meter)).items():
+            if month in costs:
+                continue
+            costs[month] = value
+            sources[month] = COST_SOURCE_ENERGY
+
         meter.monthly_cost = costs
+        meter.cost_source = sources
 
         if not costs:
             _LOGGER.debug("No cost data for meter %s", meter.key)
@@ -415,15 +430,17 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
     async def _async_company_code(self, meter: MeterUsage) -> str | None:
         """Return the company code the cost endpoint accepts for this account.
 
-        The code is required by the query and is not exposed by any endpoint the
-        integration already calls, so the known codes are tried once and the
-        first that answers is remembered.
+        The code is required by the query and no endpoint the integration already
+        calls exposes it, so the known codes are tried and the first that answers
+        is remembered. A probe that finds nothing is NOT remembered: the account
+        may simply have no cost rows yet, and the next refresh (and any reload)
+        tries again rather than writing the endpoint off for good.
         """
-        if meter.account_id in self._company_codes:
-            return self._company_codes[meter.account_id]
+        cached = self._company_codes.get(meter.account_id)
+        if cached is not None:
+            return cached
 
         today = dt_util.now(_utility_tz()).date()
-        code: str | None = None
         for candidate in COMPANY_CODES:
             try:
                 rows = await self.client.get_energy_usage_costs(
@@ -432,17 +449,26 @@ class NationalGridCoordinator(DataUpdateCoordinator[NationalGridData]):
             except _METER_ERRORS:
                 continue
             if rows:
-                code = candidate
-                break
+                self._company_codes[meter.account_id] = candidate
+                _LOGGER.info(
+                    "National Grid's cost endpoint answered for meter %s with "
+                    "company code %s",
+                    meter.key,
+                    candidate,
+                )
+                return candidate
 
-        self._company_codes[meter.account_id] = code
-        if code is None:
-            _LOGGER.debug(
-                "The cost endpoint accepted none of the company codes for meter "
-                "%s; billed totals from the bill history are used instead",
+        if meter.key in self._cost_warned:
+            _LOGGER.debug("Still no company code for meter %s", meter.key)
+        else:
+            self._cost_warned.add(meter.key)
+            _LOGGER.warning(
+                "National Grid's cost endpoint accepted none of the known company "
+                "codes for meter %s, so only billed statements provide cost. This "
+                "is retried on every refresh.",
                 meter.key,
             )
-        return code
+        return None
 
     async def _async_import_statistics(self, data: NationalGridData) -> None:
         """Import usage into long term statistics, never failing the refresh."""

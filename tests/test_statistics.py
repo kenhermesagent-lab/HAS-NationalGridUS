@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from custom_components.national_grid_us.models import MeterUsage
 from custom_components.national_grid_us.statistics import (
+    _cost_points,
     _split_points,
     statistics_id,
 )
@@ -63,6 +64,16 @@ def test_split_points_imports_monthly_figures_without_daily_readings() -> None:
 
     assert consumption == {datetime(2026, 10, 1, tzinfo=TZ): 40.0}
     assert returned == {}
+
+
+def test_cost_points_skip_energy_only_months() -> None:
+    """Only whole statements reach the cumulative cost series."""
+    meter = _meter(
+        monthly_cost={date(2026, 10, 1): 40.0, date(2026, 11, 1): 7.0},
+        cost_source={date(2026, 10, 1): "billed", date(2026, 11, 1): "energy"},
+    )
+
+    assert _cost_points(meter, TZ) == {datetime(2026, 10, 1, tzinfo=TZ): 40.0}
 
 
 def test_statistics_id_for_cost() -> None:

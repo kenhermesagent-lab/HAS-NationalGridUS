@@ -92,6 +92,8 @@ async def test_setup_entry_loads_and_creates_entities(
     assert float(cost_states[0].state) == pytest.approx(30.0)
     assert cost_states[0].attributes["device_class"] == "monetary"
     assert cost_states[0].attributes["state_class"] == "total"
+    # The attribute says the figure is a whole statement, not energy alone.
+    assert cost_states[0].attributes["cost_source"] == "billed"
 
     hour = hass.states.get(hour_id)
     assert hour is not None

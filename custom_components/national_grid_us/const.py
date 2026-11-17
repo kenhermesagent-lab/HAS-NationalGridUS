@@ -54,6 +54,12 @@ THERM_PER_CCF: Final = 1.03775
 
 CURRENCY_USD: Final = "USD"
 
+# What a month's cost figure covers. A statement is the whole bill for the
+# period, delivery and fixed charges included; the cost endpoint reports the
+# energy portion only, which is all that exists before a statement is issued.
+COST_SOURCE_BILLED: Final = "billed"
+COST_SOURCE_ENERGY: Final = "energy"
+
 # Company codes accepted by the cost endpoint. The first one that answers for
 # an account is remembered, because the code is not exposed anywhere else.
 COMPANY_CODES: Final = ("KEDLI", "KEDNY", "NMPC", "NECO", "MECO", "NARR")

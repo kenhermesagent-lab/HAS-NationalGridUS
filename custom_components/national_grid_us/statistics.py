@@ -24,7 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from .const import CURRENCY_USD, DOMAIN, UTILITY_TIME_ZONE
+from .const import COST_SOURCE_BILLED, CURRENCY_USD, DOMAIN, UTILITY_TIME_ZONE
 from .models import MeterUsage
 from .usage import local_midnight
 
@@ -185,9 +185,16 @@ async def _async_import_series(
 
 
 def _cost_points(meter: MeterUsage, tz: tzinfo) -> dict[datetime, float]:
-    """Return one cost point per month, keyed at the month's local midnight."""
+    """Return one billed-cost point per month, keyed at the month's midnight.
+
+    Only whole statements are imported. An energy-only figure covers part of a
+    period and excludes delivery and fixed charges, so mixing the two in one
+    cumulative series would make the totals meaningless.
+    """
     return {
-        local_midnight(month, tz): value for month, value in meter.monthly_cost.items()
+        local_midnight(month, tz): value
+        for month, value in meter.monthly_cost.items()
+        if meter.cost_source.get(month) == COST_SOURCE_BILLED
     }
 
 
@@ -219,7 +226,7 @@ async def async_import_meter_statistics(hass: HomeAssistant, meter: MeterUsage) 
     await _async_import_series(
         hass,
         statistics_id(meter, cost=True),
-        f"National Grid {meter.fuel_type.title()} Cost {label}",
+        f"National Grid {meter.fuel_type.title()} Billed Cost {label}",
         CURRENCY_USD,
         None,
         _cost_points(meter, tz),

@@ -51,6 +51,10 @@ def _meter_diagnostics(meter: MeterUsage) -> dict[str, Any]:
             month.isoformat(): round(value, 2)
             for month, value in sorted(meter.monthly_cost.items())[-6:]
         },
+        "cost_source": {
+            month.isoformat(): source
+            for month, source in sorted(meter.cost_source.items())[-6:]
+        },
         "recent_monthly": {
             month.isoformat(): value
             for month, value in sorted(meter.monthly.items())[-6:]
