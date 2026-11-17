@@ -16,14 +16,24 @@ _JWT_RE = re.compile(r"eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}")
 # strings; dates such as 2026-11-15 must never be mistaken for one.
 _WHOLE_ID_RE = re.compile(r"\d{3,}")
 _INLINE_ID_RE = re.compile(r"\d{3,}")
-# The same identifiers also show up inside URLs and API error strings. Only a
-# run of six or more digits that does not touch a date, a clock time or a
-# decimal is treated as an identifier, so 2026-11-15, 04:50:10.123456 and
-# readings such as 16.0 or 1234567.89 survive untouched.
-_INLINE_LONG_ID_RE = re.compile(r"(?<![\w.:+\-T])(\d{6,})(?![\w.:+\-])")
+# The same identifiers also show up inside URLs and API error strings, glued to
+# punctuation such as billing-1234567890. Numbers that must survive are matched
+# first - ISO dates and timestamps, bare clock times and decimal readings - and
+# any run of six or more digits left in the gaps is an identifier.
+# The outer group is required: re.split() drops the matched text unless the
+# pattern captures it, and these numbers must survive the split.
+_KEEP_NUMERIC_RE = re.compile(
+    "("
+    r"\d{4}-\d{2}-\d{2}"  # ISO date
+    r"(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?"  # timestamp
+    r"|\d{2}:\d{2}:\d{2}(?:\.\d+)?"  # bare clock time
+    r"|\d+\.\d+"  # decimal reading
+    ")"
+)
+_LONG_DIGITS_RE = re.compile(r"\d{6,}")
 
 # Bumped whenever the shape of a redacted dump changes.
-REDACTION_VERSION = 2
+REDACTION_VERSION = 3
 
 SECRET_KEYS = frozenset(
     {
@@ -56,13 +66,25 @@ def mask_identifier(value: object) -> str:
     return f"id:{digest}"
 
 
+def _mask_identifiers(text: str) -> str:
+    """Mask long digit runs, leaving dates, times and readings alone."""
+    pieces = _KEEP_NUMERIC_RE.split(text)
+    # The captured protected numbers land on the odd indexes, so only the gaps
+    # between them are searched for identifiers.
+    for index in range(0, len(pieces), 2):
+        pieces[index] = _LONG_DIGITS_RE.sub(
+            lambda match: mask_identifier(match.group()), pieces[index]
+        )
+    return "".join(pieces)
+
+
 def redact_text(value: str, *, mask_ids: bool = True) -> str:
     """Remove email addresses, bearer tokens and identifiers from free text."""
     text = _EMAIL_RE.sub("<email>", value)
     text = _JWT_RE.sub("<jwt>", text)
     if not mask_ids:
         return text
-    return _INLINE_LONG_ID_RE.sub(lambda match: mask_identifier(match.group()), text)
+    return _mask_identifiers(text)
 
 
 def mask_numbers(text: str) -> str:

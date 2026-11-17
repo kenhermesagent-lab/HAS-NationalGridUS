@@ -51,10 +51,11 @@ def _async_create_auth_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
         hass,
         DOMAIN,
         _auth_issue_id(entry),
-        is_fixable=False,
+        is_fixable=True,
         severity=ir.IssueSeverity.ERROR,
         translation_key=_AUTH_ISSUE_KEY,
         translation_placeholders={"account": redact_text(entry.title)},
+        data={"entry_id": entry.entry_id},
     )
 
 

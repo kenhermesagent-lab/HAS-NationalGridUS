@@ -82,6 +82,27 @@ def test_text_masks_identifiers_in_urls_and_errors() -> None:
     assert "1234567.89 kWh" in redacted
 
 
+def test_text_masks_identifiers_glued_to_punctuation() -> None:
+    """billing-1234567890 is masked, while ISO dates and timestamps survive."""
+    text = (
+        "billing-1234567890, meter+987654321, premise~555000111, "
+        "on 2026-11-15 at 2026-11-15T04:50:10.123456+00:00 "
+        "(clock 10:30:00.123456), use 16.0 kWh at 0.1234/kWh, total 1234567.89 kWh"
+    )
+
+    redacted = redact_text(text)
+
+    assert "1234567890" not in redacted
+    assert "987654321" not in redacted
+    assert "555000111" not in redacted
+    assert redacted.count("id:") == 3
+    assert "2026-11-15 at " in redacted
+    assert "2026-11-15T04:50:10.123456+00:00" in redacted
+    assert "10:30:00.123456" in redacted
+    assert "16.0 kWh at 0.1234/kWh" in redacted
+    assert "1234567.89 kWh" in redacted
+
+
 def test_text_keeps_identifiers_when_ids_are_shown() -> None:
     """--show-ids keeps identifiers but still removes secrets."""
     text = "account 1234567890 for someone@example.com"

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from homeassistant import data_entry_flow
 from homeassistant.components.recorder import Recorder
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.setup import async_setup_component
 from py_nationalgrid import InvalidAuthError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -48,7 +50,7 @@ async def test_auth_failure_creates_repair_issue(
     assert issue is not None
     assert issue.severity is ir.IssueSeverity.ERROR
     assert issue.translation_key == "auth_failed"
-    assert issue.is_fixable is False
+    assert issue.is_fixable is True
     assert issue.translation_placeholders
     # The entry title holds the login email and must not be copied into Repairs.
     assert "user@example.com" not in issue.translation_placeholders["account"]
@@ -97,6 +99,83 @@ async def test_successful_setup_clears_repair_issue(
 
     assert entry.state.name == "LOADED"
     assert _issue(hass, entry) is None
+
+
+async def _start_fix_flow(hass: HomeAssistant, entry: MockConfigEntry) -> dict:
+    """Start the Repairs fix flow for an entry the way the panel does."""
+    assert await async_setup_component(hass, "repairs", {})
+    flow_manager = hass.data["repairs"]["flow_manager"]
+    return await flow_manager.async_init(
+        DOMAIN, data={"issue_id": f"auth_failed_{entry.entry_id}"}
+    )
+
+
+async def test_repair_issue_offers_reauth_flow(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    fake_client: FakeNationalGridClient,
+    enable_custom_integrations: None,
+) -> None:
+    """Repairs offers a password form that re-authenticates the entry."""
+    fake_client.fail_with = InvalidAuthError("bad credentials")
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="user@example.com", data=ENTRY_DATA
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id) is False
+    await hass.async_block_till_done()
+
+    issue = _issue(hass, entry)
+    assert issue is not None
+    assert issue.is_fixable is True
+    assert issue.data == {"entry_id": entry.entry_id}
+
+    result = await _start_fix_flow(hass, entry)
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "init"
+    assert CONF_PASSWORD in result["data_schema"].schema
+
+    fake_client.fail_with = None
+    result = await hass.data["repairs"]["flow_manager"].async_configure(
+        result["flow_id"], {CONF_PASSWORD: "new-secret"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_PASSWORD] == "new-secret"
+    assert entry.state.name == "LOADED"
+    assert _issue(hass, entry) is None
+
+
+async def test_repair_flow_reports_rejected_password(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    fake_client: FakeNationalGridClient,
+    enable_custom_integrations: None,
+) -> None:
+    """A wrong password keeps the form open and the issue in place."""
+    fake_client.fail_with = InvalidAuthError("bad credentials")
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="user@example.com", data=ENTRY_DATA
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id) is False
+    await hass.async_block_till_done()
+
+    result = await _start_fix_flow(hass, entry)
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+
+    result = await hass.data["repairs"]["flow_manager"].async_configure(
+        result["flow_id"], {CONF_PASSWORD: "still-wrong"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert entry.data[CONF_PASSWORD] == "secret"
+    assert _issue(hass, entry) is not None
 
 
 async def test_unload_clears_repair_issue(

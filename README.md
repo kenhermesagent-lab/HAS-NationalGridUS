@@ -159,6 +159,9 @@ offers a password-only path.
 
 When setup fails on a rejected sign-in, Home Assistant also raises a repair
 issue (**Settings → System → Repairs**) that points at the diagnostics download.
+The issue is fixable: selecting **Re-authenticate** there opens a password form,
+stores the new password and reloads the entry without going through the
+integration's settings first.
 
 To confirm what actually happened on your account:
 

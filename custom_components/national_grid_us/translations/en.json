@@ -50,7 +50,22 @@
   "issues": {
     "auth_failed": {
       "title": "National Grid US sign-in failed",
-      "description": "Home Assistant could not sign in to National Grid for {account}.\n\nIf the same email and password work at myaccount.nationalgrid.com, the account most likely requires multi-factor authentication, which this integration cannot complete.\n\nTo see exactly where the sign-in stopped, open Settings → Devices & services → National Grid US → ⋮ → Download diagnostics, or run scripts/debug_nationalgrid.py, and attach the result to an issue."
+      "description": "Home Assistant could not sign in to National Grid for {account}.\n\nIf the same email and password work at myaccount.nationalgrid.com, the account most likely requires multi-factor authentication, which this integration cannot complete.\n\nSelect **Re-authenticate** to enter the password again. To see exactly where the sign-in stopped, open Settings → Devices & services → National Grid US → ⋮ → Download diagnostics, or run scripts/debug_nationalgrid.py, and attach the result to an issue.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Re-authenticate National Grid US",
+            "description": "Enter the current password for {username}. If National Grid requires multi-factor authentication for this account, the sign-in will fail again and the diagnostics download will show where it stopped.",
+            "data": { "password": "Password" }
+          }
+        },
+        "error": {
+          "invalid_auth": "National Grid rejected the email or password.",
+          "auth_flow_failed": "National Grid's sign-in finished without returning a token. This usually means the account requires multi-factor authentication, which an integration cannot complete.",
+          "cannot_connect": "Could not reach National Grid. Check your connection and try again.",
+          "unknown": "Unexpected error while signing in."
+        }
+      }
     }
   },
   "entity": {
